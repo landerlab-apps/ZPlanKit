@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.9.3"
+#define ZP_VERSION "1.9.4"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -183,6 +183,8 @@ typedef struct {
     double fo2, fhe; bool cc; double setpoint;
     /* accounting */
     double gas_l[ZP_MAX_GASES], gas_fo2[ZP_MAX_GASES], gas_fhe[ZP_MAX_GASES];
+    double gas_bottom_l[ZP_MAX_GASES];
+    bool   in_ascent;              /* bottom phase over: split consumption */
     int n_gas;
     double rmv;                    /* current RMV l/min */
 
@@ -288,9 +290,12 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
         if (gi < 0 && s->n_gas < ZP_MAX_GASES) {
             gi = s->n_gas++;
             s->gas_fo2[gi] = s->fo2; s->gas_fhe[gi] = s->fhe;
-            s->gas_l[gi] = 0;
+            s->gas_l[gi] = 0; s->gas_bottom_l[gi] = 0;
         }
-        if (gi >= 0) s->gas_l[gi] += litres;
+        if (gi >= 0) {
+            s->gas_l[gi] += litres;
+            if (!s->in_ascent) s->gas_bottom_l[gi] += litres;
+        }
     }
     s->runtime += dt;
 }
@@ -806,6 +811,10 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     double first_norm = -1;
     int deep_idx = 0;
 
+    /* Everything from here is the ascent, including deco. Consumption before
+     * this point is bottom gas spent getting to and staying at depth. */
+    s->in_ascent = true;
+
     double leg_start = s->runtime;
     while (s->depth > 1e-9) {
         /* mandated deep stop below us? honour it first */
@@ -1018,6 +1027,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     out->total_oc_l = 0;
     for (int i = 0; i < s->n_gas; i++) {
         out->gas_used_l[i] = s->gas_l[i];
+        out->gas_bottom_l[i] = s->gas_bottom_l[i];
         out->gas_fo2[i] = s->gas_fo2[i];
         out->gas_fhe[i] = s->gas_fhe[i];
         out->total_oc_l += s->gas_l[i];
@@ -1463,14 +1473,32 @@ int zp_report(const zp_config *cfg, const zp_result *res,
     {
         bool rmv_l = cfg->rmv_metric >= 0 ? (cfg->rmv_metric == 1) : metric;
         double vdiv = rmv_l ? 1.0 : L_PER_CUFT;
-        for (int i = 0; i < res->n_gas_used; i++)
-            APP(rmv_l ? "%.1f Ltr. of %.1f%% consumed.\n"
-                      : "%.2f Cu.Ft. of %.1f%% consumed.\n",
-                res->gas_used_l[i] / vdiv, res->gas_fo2[i]*100);
-        if (res->n_gas_used)
-            APP(rmv_l ? "%.1f Ltr. total open circuit gas consumed.\n"
-                      : "%.2f Cu.Ft. total open circuit gas consumed.\n",
-                res->total_oc_l / vdiv);
+        const char *unit = rmv_l ? "Ltr." : "Cu.Ft.";
+        if (res->n_gas_used) APP("Consumption (bottom + ascent):\n");
+        for (int i = 0; i < res->n_gas_used; i++) {
+            /* Name the mix the way the plan table does, rather than "of 21.0%". */
+            char name[16];
+            double fo2 = res->gas_fo2[i], fhe = res->gas_fhe[i];
+            if (fhe > 0.001)                  snprintf(name, sizeof name, "TMX %.0f/%.0f", fo2*100, fhe*100);
+            else if (fabs(fo2 - 0.21) < 0.005) snprintf(name, sizeof name, "Air");
+            else if (fo2 > 0.995)              snprintf(name, sizeof name, "O2");
+            else                               snprintf(name, sizeof name, "EAN%.0f", fo2*100);
+
+            double total  = res->gas_used_l[i]   / vdiv;
+            double bottom = res->gas_bottom_l[i] / vdiv;
+            double ascent = total - bottom;
+            /* Only a back gas is split: it is the one carried down, so the
+             * ascent share is what has to still be in the cylinder when the
+             * bottom phase ends. A deco gas is breathed on the way up only, so
+             * its total is the whole story. */
+            if (bottom > 1e-9)
+                APP(rmv_l ? "  %-10s %.1f + %.1f = %.1f %s\n"
+                          : "  %-10s %.2f + %.2f = %.2f %s\n",
+                    name, bottom, ascent, total, unit);
+            else
+                APP(rmv_l ? "  %-10s %.1f %s\n" : "  %-10s %.2f %s\n",
+                    name, total, unit);
+        }
     }
     if (res->warnings[0]) APP("\n%s", res->warnings);
     #undef APP

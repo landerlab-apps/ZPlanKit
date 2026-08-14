@@ -134,6 +134,10 @@ typedef struct {
     double bottom_density_gl;  /* breathing-gas density at the deepest point, g/l */
     /* litres consumed per distinct OC gas */
     double gas_used_l[ZP_MAX_GASES];
+    /* of which was breathed before leaving the bottom. Deco gases are zero
+     * here, which is what distinguishes a back gas from a deco gas in the
+     * consumption report: only a back gas needs its ascent share broken out. */
+    double gas_bottom_l[ZP_MAX_GASES];
     double gas_fo2[ZP_MAX_GASES];
     double gas_fhe[ZP_MAX_GASES];
     int    n_gas_used;

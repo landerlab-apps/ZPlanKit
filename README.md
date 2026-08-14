@@ -1,4 +1,4 @@
-# ZPlanKit v1.9.3
+# ZPlanKit v1.9.4
 
 > **WARNING**
 >
@@ -251,6 +251,15 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.9.4** (2026-08-14) — Consumption is reported per gas as bottom + ascent,
+  and the total open-circuit line is gone. Mixes are named as they are in the
+  plan table (Air, EAN50, O2, TMX 18/45) rather than "of 21.0% consumed".
+
+  Only a back gas is split. It is the one carried down, so its ascent share is
+  what must still be in the cylinder when the bottom phase ends — the number
+  that matters for planning. A deco gas is breathed on the way up only, so its
+  total is the whole story; zero bottom consumption is what identifies it.
+
 * **v1.9.3** (2026-08-14) — Gas switch depths snap down to the stop grid. The
   raw MOD is a number like 22.0 m for EAN50 at 1.6; divers switch on the grid
   and take the 21 m rung rather than argue about the last 0.6 m. Oxygen at 1.6

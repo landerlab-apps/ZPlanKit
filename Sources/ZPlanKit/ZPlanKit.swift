@@ -44,6 +44,12 @@ public struct GasUse {
     public let fO2: Double
     public let fHe: Double
     public let liters: Double
+    /// Of which was breathed before leaving the bottom. Zero for a deco gas,
+    /// which is what marks it as one; a back gas has a bottom share and an
+    /// ascent share worth planning separately.
+    public let bottomLiters: Double
+    /// Breathed on the way up, after leaving the bottom.
+    public var ascentLiters: Double { liters - bottomLiters }
 }
 
 /// Post-dive tissue state, for repetitive-dive planning.
@@ -157,8 +163,10 @@ private extension DivePlan {
         }
         var gases: [GasUse] = []
         let gl = arrN(r.gas_used_l), go = arrN(r.gas_fo2), gh = arrN(r.gas_fhe)
+        let gb = arrN(r.gas_bottom_l)
         for i in 0..<Int(r.n_gas_used) {
-            gases.append(GasUse(fO2: go[i], fHe: gh[i], liters: gl[i]))
+            gases.append(GasUse(fO2: go[i], fHe: gh[i], liters: gl[i],
+                                bottomLiters: gb[i]))
         }
         self.lines = out
         self.totalDecoMinutes = r.total_deco_min
