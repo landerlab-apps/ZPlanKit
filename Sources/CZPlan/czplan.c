@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.9.4"
+#define ZP_VERSION "1.9.5"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -1424,8 +1424,11 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                 double hold = L->stop_sec / 60.0;
                 int gm = (int)hold, gs = (int)((hold - gm) * 60 + 0.5);
                 if (gs == 60) { gm++; gs = 0; }
+                /* GasSw, not Gas: the left column is an event column, and this
+                 * row is an event. Five characters, matching DStop, so nothing
+                 * else in the layout moves. */
                 APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-11s %4.2f %4.0f%-2s\n",
-                    "Gas  ", L->depth_m * dscale, du, gm, gs,
+                    "GasSw", L->depth_m * dscale, du, gm, gs,
                     ceil(L->runtime_min - 1e-6), gas,
                     L->ppo2, L->ead_m * dscale, du);
                 prev_end = L->runtime_min; prev_depth = L->depth_m;

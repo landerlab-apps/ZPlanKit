@@ -1,4 +1,4 @@
-# ZPlanKit v1.9.4
+# ZPlanKit v1.9.5
 
 > **WARNING**
 >
@@ -251,6 +251,11 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.9.5** (2026-08-14) — The gas-switch row is marked `GasSw` rather than
+  `Gas`. The left column is an event column, so the marker should read as an
+  event; five characters keeps it the same width as `DStop` and nothing else in
+  the layout moves.
+
 * **v1.9.4** (2026-08-14) — Consumption is reported per gas as bottom + ascent,
   and the total open-circuit line is gone. Mixes are named as they are in the
   plan table (Air, EAN50, O2, TMX 18/45) rather than "of 21.0% consumed".
