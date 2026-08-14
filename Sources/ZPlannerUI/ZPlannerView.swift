@@ -24,6 +24,33 @@ func printPlan(_ text: String) {
     op.printInfo.isVerticallyCentered = false
     op.run()
 }
+#else
+/// Print the plan through AirPrint. Print previously existed on macOS only, so
+/// the button was simply absent on iPhone and iPad.
+func printPlan(_ text: String) {
+    let formatter = UISimpleTextPrintFormatter(text: text)
+    formatter.font = UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+
+    let info = UIPrintInfo.printInfo()
+    info.outputType = .general
+    info.jobName = "Dive Plan"
+
+    let controller = UIPrintInteractionController.shared
+    controller.printInfo = info
+    controller.printFormatter = formatter
+
+    // On iPad the print panel is a popover and needs an anchor; presenting
+    // without one does nothing there.
+    let scene = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .first { $0.activationState == .foregroundActive }
+    if let view = (scene?.keyWindow ?? scene?.windows.first)?.rootViewController?.view {
+        let anchor = CGRect(x: view.bounds.maxX - 60, y: 40, width: 1, height: 1)
+        controller.present(from: anchor, in: view, animated: true, completionHandler: nil)
+    } else {
+        controller.present(animated: true, completionHandler: nil)
+    }
+}
 #endif
 
 // MARK: - Disclaimer
@@ -407,7 +434,11 @@ final class PlannerModel: ObservableObject {
 
     private func appendLog() {
         guard !planText.isEmpty else { return }
-        if log.first?.text == planText { return }   // don't stack duplicates
+        // Compare against the whole log, not just the newest entry. Checking
+        // only the first meant a plan you had deleted came straight back the
+        // next time you pressed Calculate on the same settings, which read as
+        // "deleted entries reappear".
+        if log.contains(where: { $0.text == planText }) { return }
         log.insert(LogEntry(summary: diveSummary, text: planText), at: 0)
         Store.saveLog(log)
     }
@@ -512,11 +543,11 @@ public struct ZPlannerView: View {
             shareButton
                 .disabled(noPlan)
                 .opacity(noPlan ? 0.4 : 1)
-            #if os(macOS)
+            // Print is available on every platform now; it was macOS-only, so
+            // the button was missing entirely on iPhone and iPad.
             barButton("Print", "printer") { printPlan(m.planText) }
                 .disabled(noPlan)
                 .opacity(noPlan ? 0.4 : 1)
-            #endif
             barButton("Info", "info.circle") { showInfo = true }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)

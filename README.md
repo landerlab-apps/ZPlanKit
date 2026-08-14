@@ -1,4 +1,4 @@
-# ZPlanKit v1.8.1
+# ZPlanKit v1.8.2
 
 > **WARNING**
 >
@@ -251,6 +251,17 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.8.2** (2026-08-14) — Two report fixes found on an iPad CCR plan.
+  Closed-circuit rows printed the diluent as well as the setpoint
+  ("CC 21/0 SP 1.50"), 15 characters in an 11-column field, which pushed PO2 and
+  EAD out of alignment and wrapped the row; they now print "CC SP1.50". The
+  diluent does not set inspired PO2 on closed circuit and its inert content is
+  already visible in EAD.
+  The extra-slow hold is now charged to the stop where it happens rather than to
+  the following ascent leg: a 3 m ascent was reading "6:01" because up to five
+  minutes of hold at the deeper stop landed in the travel line. Same schedule,
+  same total deco — the time is now shown where the diver actually spends it.
+
 * **v1.8.1** (2026-08-14) — Suppressed the two VVAL-18 notes in the plan output
   ("gradient factors do not apply to VVAL-18; ignored" and "VVAL-18 helium
   halftimes are an unvalidated approximation"), at the owner's request. The

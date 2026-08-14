@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.8.1"
+#define ZP_VERSION "1.8.2"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -790,7 +790,9 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         if (stop_time > 1e-9 && first_norm < 0) first_norm = here;
         if (stop_time > 1e-9 && out->decozone_start_m <= 0)
             out->decozone_start_m = here;
+        int norm_idx = -1;
         if (stop_time > 1e-9 && out->n_lines < ZP_MAX_PLAN_LINES) {
+            norm_idx = out->n_lines;
             zp_plan_line *L = &out->lines[out->n_lines++];
             L->kind = ZP_LINE_NORMSTOP; L->depth_m = here;
             L->stop_sec = stop_time * 60.0;
@@ -813,7 +815,18 @@ static int run_plan(const zp_config *cfg, zp_result *out,
              * while the diver actually stayed under water considerably longer. */
             double es_before = s->es_delay_min;
             travel(s, gg, true);
-            out->total_deco_min += (s->es_delay_min - es_before);
+            double held = s->es_delay_min - es_before;
+            out->total_deco_min += held;
+
+            /* v1.8.2: charge the hold to the stop it happens at, not to the
+             * ascent leg. The rule holds depth at the stop before rising, but
+             * the delay used to land in the travel line, which then read as a
+             * 6:01 ascent over 3 m — alarming and physically misleading. It now
+             * shows as extra time at the stop, and the ascent reads normally. */
+            if (held > 1e-9 && norm_idx >= 0) {
+                out->lines[norm_idx].stop_sec    += held * 60.0;
+                out->lines[norm_idx].runtime_min += held;
+            }
         }
         s->inter_stop = false;
         if (gg <= 1e-9) break;
@@ -1192,8 +1205,12 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                                 (L->cc && fabs(L->setpoint - psp) > 1e-6));
             char gas[48];
             if (L->cc)
-                snprintf(gas, sizeof gas, "CC %.0f/%.0f SP %.2f",
-                         L->fo2*100, L->fhe*100, L->setpoint);
+                /* Setpoint only. The diluent used to be printed here too
+                 * ("CC 21/0 SP 1.50"), which is 15 characters in an 11-column
+                 * field: it pushed PO2 and EAD out of alignment and wrapped the
+                 * row. On closed circuit the diluent does not set the inspired
+                 * PO2 anyway, and its inert content is already visible in EAD. */
+                snprintf(gas, sizeof gas, "CC SP%.2f", L->setpoint);
             else if (L->fhe > 0.001)
                 snprintf(gas, sizeof gas, "TMX %.0f/%.0f", L->fo2*100, L->fhe*100);
             else if (fabs(L->fo2 - 0.21) < 0.005)
