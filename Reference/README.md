@@ -40,3 +40,39 @@ behaves exactly like this — accurate where it was anchored, drifting elsewhere
 
 So VVAL-79 should be judged on both tables: it must hold the no-stop accuracy
 that already exists, and close the schedule gap.
+
+## Correction: schedule comparison, done properly
+
+An earlier comparison against a Cochran NSW III (VVAL-18) printout suggested this
+engine ran ~6 min short and was "aggressive". That conclusion was wrong. It
+compared totals across two differences at once: the Cochran terminates at 3 m
+while the USN tables terminate at 20 fsw, and the Cochran uses VVal-18
+parameters while Rev 7 tables are VVal-79.
+
+Compared against Rev 7 Table 9-9 under Navy conventions
+(150 fsw / 20 min air, descent 75 fpm, ascent 30 fpm, stops every 10 fsw,
+last water stop 20 fsw per section 9-6.5, conservatism 0):
+
+| | 1st stop | 30 fsw | 20 fsw | To 1st stop | Total ascent |
+|---|---|---|---|---|---|
+| USN Rev 7 (VVal-79) | 30 fsw | 2:00 | 15:00 | 4:00 | 21:40 |
+| App VVAL-18         | 30 fsw | 3:00 | 20:20 | 4:00 | ~24:40 |
+| App ZHL16-C         | 30 fsw | 1:00 | 25:00 | 4:00 | ~28:00 |
+
+Findings:
+
+* First stop depth and time-to-first-stop match the table exactly. The ceiling
+  calculation is not the problem, and the "first stop 9 m instead of 6 m" noted
+  earlier was an artefact of using a 3 m last stop, not a defect.
+* The engine is *more* conservative than the Rev 7 table, not less — the
+  opposite of the earlier claim.
+* The residual gap is concentrated in the shallowest stop: 20:20 against 15:00
+  at 20 fsw. The deep stop is within a minute.
+
+The shallow-stop gap is where VVAL-79 should be judged: the published M0 values
+and the 360- and 480-minute compartments, both absent from the current fitted
+set, govern exactly that part of the ascent.
+
+Note also: AscentCredit changes nothing on these profiles. With a 10 fsw stop
+grid at 30 fpm each ascent leg lasts 20 seconds, too short for the predictive
+rule to diverge from the instantaneous ceiling.
