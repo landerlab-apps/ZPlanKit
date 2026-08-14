@@ -16,12 +16,34 @@ import UIKit
 
 #if os(macOS)
 /// Print the plan text through the standard macOS print panel.
+///
+/// Requires the `com.apple.security.print` entitlement. The app enables App
+/// Sandbox, and without that key macOS refuses with "This application does not
+/// support printing" — there is no automatic build setting for it, so it is
+/// declared in Lplanner.entitlements.
 func printPlan(_ text: String) {
-    let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: 612, height: 792))
+    let info = NSPrintInfo.shared
+    info.isVerticallyCentered = false
+    let pageWidth = info.paperSize.width - info.leftMargin - info.rightMargin
+
+    let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: pageWidth, height: 1))
     tv.string = text
     tv.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-    let op = NSPrintOperation(view: tv)
-    op.printInfo.isVerticallyCentered = false
+    tv.isVerticallyResizable = true
+    tv.isHorizontallyResizable = false
+
+    // Size the view to its whole content. A fixed one-page height silently
+    // truncated any plan longer than a page, since NSPrintOperation paginates
+    // the view it is given rather than the text inside it.
+    if let lm = tv.layoutManager, let tc = tv.textContainer {
+        tc.containerSize = NSSize(width: pageWidth, height: .greatestFiniteMagnitude)
+        tc.widthTracksTextView = true
+        lm.ensureLayout(for: tc)
+        let used = lm.usedRect(for: tc).size
+        tv.frame = NSRect(x: 0, y: 0, width: pageWidth, height: ceil(used.height) + 24)
+    }
+
+    let op = NSPrintOperation(view: tv, printInfo: info)
     op.run()
 }
 #else
