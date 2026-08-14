@@ -1,4 +1,4 @@
-# ZPlanKit v1.9.1
+# ZPlanKit v1.9.2
 
 > **WARNING**
 >
@@ -251,6 +251,19 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.9.2** (2026-08-14) — Gas switches happen at the mix's maximum operating
+  depth, mid-water, rather than at whatever stop comes next. `travel()` now
+  splits an ascent leg at any MOD it crosses, switches there and continues,
+  recursing so several mixes come on line during one ascent. With Pyle stops on,
+  EAN50 at 1.6 previously waited until the 18 m deep stop; it now goes on the
+  bottle on the way past, which is where the oxygen window opens.
+
+  The MOD test also moved from alveolar to ambient pressure. Alveolar belongs in
+  the tissue model; MOD is an ambient convention, and using alveolar permitted a
+  switch about 2 m deeper than the stated limit and printed a PO2 above the
+  configured maximum. Across 24 gas and limit combinations the displayed PO2 now
+  never exceeds the limit set.
+
 * **v1.9.1** (2026-08-14) — Pyle deep stops now use the deco gas when one is
   permitted at that depth. The deep-stop branch travelled, held and continued
   without ever calling `select_deco_source()`, so every deep stop was breathed

@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.9.1"
+#define ZP_VERSION "1.9.2"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -191,6 +191,7 @@ typedef struct {
     double gf_force;               /* >0: override GF (NDL check) */
     bool   inter_stop;             /* this leg runs from one stop to the next */
     double es_delay_min;           /* cumulative extra-slow hold time (v1.8.0) */
+    zp_result *out;                /* for recording mid-water gas switches */
     int    ncomp;                  /* active compartments: 17 Buhlmann, 12 VVAL */
     int    rmv_switched;           /* deco RMV engaged yet? */
     char *warn; size_t warnlen;
@@ -384,7 +385,82 @@ static double offgas_gradient_at(const sim *s, double target_m) {
     return worst;
 }
 
+/* Forward declarations: travel() switches gas mid-water and therefore needs
+ * these, but they are defined further down alongside the other deco helpers. */
+static void   select_deco_source(sim *s, double depth);
+static double ext_stop_for(const zp_config *c, double depth_m);
+static double display_ppo2(const sim *s, double depth_m);
+static double end_m(const sim *s, double depth_m);
+static double ead_m(const sim *s, double depth_m);
+
+/* Deepest depth strictly between the current depth and `to_m` at which a
+ * richer deco gas first becomes permitted, or -1 if there is none.
+ *
+ * Divers switch at the mix's MOD, not at whatever stop happens to come next:
+ * EAN50 at 1.6 goes on the bottle at 21 m even when the next stop is 18 m,
+ * because that is where the oxygen window opens. Returning the deepest such
+ * depth lets travel() recurse and pick up several mixes on one leg. */
+static double gas_switch_depth(const sim *s, double to_m) {
+    const zp_config *c = s->cfg;
+    if (!c->use_oc_deco || c->n_oc_deco == 0) return -1;
+    double best = -1;
+    for (int i = 0; i < c->n_oc_deco; i++) {
+        double fo2 = c->oc_deco_fo2[i];
+        if (fo2 <= s->fo2 + 1e-6) continue;          /* no richer than current */
+        /* Exactly the MOD — no tolerance. The 0.2 m allowance in
+         * best_deco_gas() exists so a stop sitting a centimetre past the limit
+         * still qualifies; adding it here would put the diver on the mix
+         * deeper than its own MOD and show a PO2 above the configured maximum. */
+        double max_pa = c->oc_deco_max_po2 / fo2 * P_SEALEVEL;
+        double d = (max_pa - s->p_surface) / s->bar_per_m;
+        double fnarc = (1.0 - fo2) + (c->oxy_narc ? fo2 : 0.0);
+        double ref = c->oxy_narc ? 1.0 : 0.79;
+        double p_end = (s->p_surface + d * s->bar_per_m) * fnarc / ref;
+        if ((p_end - s->p_surface) / s->bar_per_m > c->max_end_m + 1e-6) continue;
+        if (d >= s->depth - 1e-9) continue;          /* already available */
+        if (d <= to_m + 1e-9) continue;              /* target reaches it anyway */
+        if (d > best) best = d;
+    }
+    return best;
+}
+
+/* Put the diver on the best gas here and note it in the plan. */
+static void do_gas_switch(sim *s) {
+    double pre_fo2 = s->fo2, pre_fhe = s->fhe; bool pre_cc = s->cc;
+    select_deco_source(s, s->depth);
+    if (fabs(s->fo2 - pre_fo2) < 1e-6 && fabs(s->fhe - pre_fhe) < 1e-6 &&
+        s->cc == pre_cc) return;
+
+    double ext = ext_stop_for(s->cfg, s->depth);
+    if (ext > 1e-9) {
+        double left = ext;
+        while (left > 1e-9) { double dt = left<DT?left:DT; tick(s,s->depth,dt,false); left -= dt; }
+        if (s->out) s->out->total_deco_min += ext;
+    }
+    if (s->out && s->out->n_lines < ZP_MAX_PLAN_LINES) {
+        zp_plan_line *L = &s->out->lines[s->out->n_lines++];
+        L->kind = ZP_LINE_GASSWITCH; L->depth_m = s->depth;
+        L->stop_sec = ext * 60.0; L->runtime_min = s->runtime;
+        L->fo2 = s->fo2; L->fhe = s->fhe; L->cc = s->cc;
+        L->setpoint = s->setpoint;
+        L->ppo2 = display_ppo2(s, s->depth);
+        L->end_m = end_m(s, s->depth);
+        L->ead_m = ead_m(s, s->depth);
+    }
+}
+
 static void travel(sim *s, double to_m, bool ascent) {
+    /* Split the leg at any MOD crossed on the way up, switch there, continue.
+     * Recursion handles several mixes coming on line during one ascent. */
+    if (ascent && s->depth > to_m + 1e-9) {
+        double sw = gas_switch_depth(s, to_m);
+        if (sw > to_m + 1e-9 && sw < s->depth - 1e-9) {
+            travel(s, sw, true);
+            do_gas_switch(s);
+            travel(s, to_m, true);
+            return;
+        }
+    }
     double dir = (to_m > s->depth) ? 1.0 : -1.0;
     double delayed = 0;
     while (fabs(s->depth - to_m) > 1e-9) {
@@ -485,12 +561,25 @@ static double display_ppo2(const sim *s, double depth_m) {
 static int best_deco_gas(const sim *s, double depth_m) {
     const zp_config *c = s->cfg;
     if (!c->use_oc_deco || c->n_oc_deco == 0) return -1;
-    double pa = alveolar(pamb(s, depth_m));
     int best = -1; double best_fo2 = -1;
     for (int i = 0; i < c->n_oc_deco; i++) {
         double fo2 = c->oc_deco_fo2[i];
-        double po2 = pa * fo2;
-        if (po2 > c->oc_deco_max_po2 + 0.03) continue;    /* rounding slack */
+        /* Maximum operating depth is an AMBIENT-pressure convention — EAN50 at
+         * 1.6 switches at 21 m, which is what a diver's own MOD table says.
+         * This used to test alveolar pressure (ambient minus water vapour),
+         * which belongs in the tissue model but not here: it permitted a switch
+         * roughly 2 m deeper than the stated limit and made the report show a
+         * PO2 above the configured maximum.
+         *
+         * Expressed as a depth so the tolerance can be too: 0.2 m absorbs the
+         * difference between this engine's water column (0.10125 bar/m off
+         * 1.01325 bar) and the round 10 m-per-bar arithmetic divers use, so a
+         * conventional 18 m switch on EAN50 at 1.4 is not rejected by a
+         * centimetre. PO2 is taken in ATA, matching the report column, so the
+         * displayed figure never exceeds the limit that was set. */
+        double max_pa = c->oc_deco_max_po2 / fo2 * P_SEALEVEL;      /* bar */
+        double max_depth = (max_pa - s->p_surface) / s->bar_per_m;  /* metres */
+        if (depth_m > max_depth + 0.2) continue;
         double fnarc = (1.0 - fo2) + (c->oxy_narc ? fo2 : 0.0);
         double ref = c->oxy_narc ? 1.0 : 0.79;
         double p_end = pamb(s, depth_m) * fnarc / ref;
@@ -592,6 +681,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     sim *s = &S;
     s->cfg = cfg;
     s->warn = out->warnings; s->warnlen = sizeof out->warnings;
+    s->out = out;
     s->p_surface = P_SEALEVEL *
         pow(1.0 - 2.25577e-5 * cfg->altitude_m, 5.25588);
     s->bar_per_m = (cfg->salt_water ? RHO_SALT : RHO_FRESH) * G_ACC / 1e5;
@@ -771,15 +861,10 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         if (can_leave(s, g)) {
             travel(s, g, true);
             if (g <= 1e-9) break;               /* surfaced */
-            /* v1.8.3: switch gas on the way up, not only at stops.
-             * select_deco_source() used to be called solely where a stop was
-             * required, so a gas whose maximum operating depth lay deeper than
-             * the first stop was never picked up: with EAN50 at MaxPO2 1.6 the
-             * diver stayed on bottom gas past 21 m and only switched at the
-             * 9 m stop. Divers switch at the MOD, so the check now runs at
-             * every stop-grid depth passed during the ascent. No guard is
-             * needed: best_deco_gas() returns -1 while still too deep for any
-             * listed gas, and select_deco_source() then keeps the bottom mix. */
+            /* travel() switches at the mix's MOD mid-water, so by here the
+             * gas is normally already correct. This grid-depth check remains as
+             * a backstop for a gas that only becomes legal because MaxEND is
+             * satisfied at the stop rather than on the way to it. */
             double pre_fo2 = s->fo2, pre_fhe = s->fhe; bool pre_cc = s->cc;
             select_deco_source(s, s->depth);
             if ((fabs(s->fo2 - pre_fo2) > 1e-6 || fabs(s->fhe - pre_fhe) > 1e-6 ||
