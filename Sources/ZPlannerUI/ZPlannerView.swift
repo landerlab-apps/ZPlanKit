@@ -298,6 +298,12 @@ final class PlannerModel: ObservableObject {
 
     var repetitive: Bool { si48 || si24 || !siActual.isEmpty }
 
+    /// While residual gas is carried, a surface interval must be stated before a
+    /// plan can be produced. Guessing it from the clock would let a diver get a
+    /// schedule without ever confronting the fact that a previous dive is still
+    /// loaded, which is the one thing a repetitive plan must not hide.
+    var canCalculate: Bool { !hasResidual || repetitive }
+
     /// A typed surface interval wins, so what-if planning still works. Otherwise
     /// the real elapsed time since the residual was recorded is used, which is
     /// what makes the tracking advance while the app is closed.
@@ -406,6 +412,12 @@ final class PlannerModel: ObservableObject {
     }
 
     func calculate() {
+        guard canCalculate else {
+            notes = "Residual gas is carried from an earlier dive. "
+                  + "Set the surface interval — 48 hr, 24 hr, or Actual — before calculating."
+            planText = ""
+            return
+        }
         guard levels.contains(where: { $0.enabled }) else {
             notes = "No enabled dive levels — add a Depth / Time / O2 row first."
             planText = ""
@@ -594,7 +606,10 @@ public struct ZPlannerView: View {
                     .font(.headline)
                     .padding(.horizontal, 18).padding(.vertical, 7)
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black, lineWidth: 1.5))
-            }.buttonStyle(.plain)
+            }
+            .buttonStyle(.plain)
+            .disabled(!m.canCalculate)
+            .opacity(m.canCalculate ? 1 : 0.4)
             Spacer()
             // Share, Print and Info are permanent. Share and Print used to be
             // hidden until a plan existed, so the right-hand side of the bar
@@ -686,7 +701,9 @@ public struct ZPlannerView: View {
             // able to see and cancel.
             HStack(spacing: 10) {
                 if m.hasResidual {
-                    Text("Residual gas carried — surfaced \(m.elapsedText) ago")
+                    Text(m.canCalculate
+                         ? "Residual gas carried — surfaced \(m.elapsedText) ago"
+                         : "Residual gas carried — set a surface interval to calculate")
                         .font(.caption).foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
                     Button("Clear") { m.clearTissues() }
                         .buttonStyle(.plain).font(.caption).underline()
