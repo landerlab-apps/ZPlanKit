@@ -76,3 +76,59 @@ set, govern exactly that part of the ascent.
 Note also: AscentCredit changes nothing on these profiles. With a 10 fsw stop
 grid at 30 fpm each ascent leg lasts 20 seconds, too short for the predictive
 rule to diverge from the instantaneous ceiling.
+
+## Provenance of the VVAL parameters, and a document that is wrong
+
+The engine's VVAL parameters come from the owner's `parameters.py`
+(`/Volumes/KingstonData/DiveProfileAnalyzerVVALV0/parameters.txt`), which
+reverse-engineers the **Cochran Navy NSW III** implementation. Its structure is
+deliberate:
+
+* Twelve compartments, because the Cochran uses twelve tissues — evidenced by
+  its `TWELVETISSUES` protocol command, the C0Form-C10Form dialogs, and the
+  string "Twelve Tissue Halftimes Computations" in `AnalystM.exe`.
+* Nine of those are the NEDU half-times 5, 10, 20, 40, 80, 120, 160, 200, 240.
+* Their surfacing MPTTs (99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5)
+  are cited `[NEDU]` to TR 12-01 Table 3 — the **VVAL-79** set.
+* MPTT slope is 1.0 fsw/fsw for every compartment, per VVAL-79.
+* Three faster compartments (1.5/2.5/3.5 min) and all crossover pressures are
+  marked `[WORKING]` — placeholders pending fitting against Cochran dive logs.
+
+Note this means the model the app labels **VVAL-18 is built on VVAL-79 MPTTs**.
+The label does not describe its contents, which is also why it tracks the Rev 7
+tables (themselves VVal-79 derived) so closely.
+
+### The Thalmann_DC_Implementation.pdf parameter set does not work
+
+That document specifies 9 compartments at 5/10/20/40/80/160/240/360/480 min,
+M0 of 78/78/78/58/52/51/50/49/48, slopes 1.2-1.8, global PBOVP and SDR 0.67 —
+all cited to the same NEDU TR 12-01 Table 3. It contradicts `parameters.py`.
+
+Resolved empirically by patching the engine with each set and computing
+no-stop limits against Rev 7 Table 9-7:
+
+| Depth | USN Rev 7 | parameters.py (12c) | PDF set (9c) |
+|------:|----------:|--------------------:|-------------:|
+|  60 ft |  63 | 62 (-1) | 70 (+7)  |
+|  70 ft |  48 | 47 (-1) | 53 (+5)  |
+|  80 ft |  39 | 38 (-1) | 15 (-24) |
+|  90 ft |  33 | 32 (-1) | 10 (-23) |
+| 100 ft |  25 | 25  (0) |  7 (-18) |
+| 110 ft |  20 | 19 (-1) |  6 (-14) |
+| 130 ft |  12 | 12  (0) |  3  (-9) |
+| 150 ft |   8 |  8  (0) |  2  (-6) |
+
+`parameters.py` reproduces the Navy table to within one minute at every depth.
+The PDF's set misses by up to 24 minutes, erratically in both directions.
+
+**Do not use Thalmann_DC_Implementation.pdf as an implementation spec.** It
+appears to be a secondary summary that conflates VVal-18M and VVal-79 values.
+An earlier plan to "implement VVal-79 per that document" would have replaced a
+working parameter set with a broken one.
+
+### Actual remaining work
+
+1. Crossover pressures: `czplan.c` uses 23/17/13/11/8/8/8/8 (refitted 2026-08-07),
+   `parameters.py` has 20/15/12/10 with slow compartments infinite. Both `[WORKING]`.
+2. The three fast compartments' MPTTs are `[WORKING]` extrapolations.
+3. The 20 fsw stop runs 20:20 against the table's 15:00.
