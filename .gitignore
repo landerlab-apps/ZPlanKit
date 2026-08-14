@@ -2,5 +2,5 @@
 .build/
 .swiftpm/xcode/
 *.o
-*.out
-plan.out.tmp
+zplan
+# NB: Samples/plan.out is the reference regression output and IS tracked.
