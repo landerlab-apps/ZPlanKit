@@ -1,4 +1,4 @@
-# ZPlanKit v1.8.3
+# ZPlanKit v1.9.0
 
 > **WARNING**
 >
@@ -251,6 +251,14 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.9.0** (2026-08-14) — Extended stops on a deco mix switch. `ExtStopDeep`
+  and `ExtStopShallow` (0-10 min each) hold the diver at the depth where the
+  planner switches to a deco gas, chosen by band: 30 m or deeper, and 7 m up to
+  30 m. Switches shallower than 7 m are not extended. The hold goes through the
+  stop's minimum time rather than being added afterwards, so it off-gasses the
+  diver and the stops above usually shorten — 5 min at a 21 m switch added only
+  2 min to total deco on the test profile. Counted as decompression time.
+
 * **v1.8.3** (2026-08-14) — Deco gases now switch on the way up, not only at
   stops. `select_deco_source()` was called in exactly one place — where a stop
   was required — so a gas whose maximum operating depth was deeper than the

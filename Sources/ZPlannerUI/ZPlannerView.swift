@@ -84,7 +84,8 @@ public struct Manual {
 
     DECO GASES
     Click Yes and list the mixes, e.g. 50, 100. The planner picks the richest \
-    one allowed by Max PO2 and Max END.
+    one allowed by Max PO2 and Max END. Config can also hold you at the switch \
+    for a few extra minutes — see Extended stops.
 
     CONFIG
     Units, water, altitude, model, gradient factors, deep stops, ascent and \
@@ -157,6 +158,7 @@ struct PlannerState: Codable {
     var ascentRates = "70-30, 18\n30-12, 9\n12-0, 3"
     var decoSetpoints = "", slideRate = "0.1", maxPO2 = "1.6", maxEND = "40"
     var bottomRMV = "19", decoRMV = "14"
+    var extStopShallow = 0, extStopDeep = 0
     var si48 = false, si24 = false, siActual = ""
     var decoGasesOn = true, decoGases = "50"
     var circuitClosed = false, plus3m = false, plus5min = false, useAltGF = false
@@ -236,6 +238,9 @@ final class PlannerModel: ObservableObject {
     @Published var maxEND = "40"
     @Published var bottomRMV = "19"
     @Published var decoRMV = "14"
+    /// Extra hold on a deco mix switch, per depth band, 0-10 min.
+    @Published var extStopShallow = 0
+    @Published var extStopDeep = 0
     // ---- Main window rows ----
     @Published var si48 = false
     @Published var si24 = false
@@ -286,6 +291,7 @@ final class PlannerModel: ObservableObject {
         decoSetpoints = s.decoSetpoints; slideRate = s.slideRate
         maxPO2 = s.maxPO2; maxEND = s.maxEND
         bottomRMV = s.bottomRMV; decoRMV = s.decoRMV
+        extStopShallow = s.extStopShallow; extStopDeep = s.extStopDeep
         si48 = s.si48; si24 = s.si24; siActual = s.siActual
         decoGasesOn = s.decoGasesOn; decoGases = s.decoGases
         circuitClosed = s.circuitClosed
@@ -310,6 +316,7 @@ final class PlannerModel: ObservableObject {
         s.decoSetpoints = decoSetpoints; s.slideRate = slideRate
         s.maxPO2 = maxPO2; s.maxEND = maxEND
         s.bottomRMV = bottomRMV; s.decoRMV = decoRMV
+        s.extStopShallow = extStopShallow; s.extStopDeep = extStopDeep
         s.si48 = si48; s.si24 = si24; s.siActual = siActual
         s.decoGasesOn = decoGasesOn; s.decoGases = decoGases
         s.circuitClosed = circuitClosed
@@ -379,6 +386,8 @@ final class PlannerModel: ObservableObject {
         OcDecoGas: \(decoGases)
         OcDecoMaxPO2: \(maxPO2)
         MaxEND: \(maxEND)
+        ExtStopShallow: \(extStopShallow)
+        ExtStopDeep: \(extStopDeep)
         """
         if (useGF || useAltGF) && model != "vval" {
             let lo = useAltGF ? altGfLow : gfLow
@@ -514,6 +523,9 @@ final class PlannerModel: ObservableObject {
         }
         if deepStops == "p" && !gfOn { extras.append("Pyle \(pyleTime) min") }
         if extraSlow { extras.append("extra-slow") }
+        if extStopShallow > 0 || extStopDeep > 0 {
+            extras.append("ext stops \(extStopDeep)/\(extStopShallow) min")
+        }
         if plus3m { extras.append(depthsMetric ? "+3m" : "+10ft") }
         if plus5min { extras.append("+5min") }
         if repetitive { extras.append("SI \(surfaceInterval)") }
@@ -1004,6 +1016,19 @@ struct ConfigSheet: View {
                             .disabled(!m.circuitClosed)
                             .opacity(m.circuitClosed ? 1 : 0.4)
                         row2("Slide rate (PO2/min)", $m.slideRate)
+                    }
+                    group("Extended stops on a deco mix switch",
+                          help: "Extra minutes held at the depth where the planner switches to a deco mix, on top of whatever the model requires. Common practice: settle on the new gas, confirm the analysis and the PO2, and let the switch do some work for you. The amount is chosen by the depth of the switch, in two bands. Switches shallower than 7 m / 23 ft are not extended — the final stop is already long. The extra time off-gasses you, so it does not simply add to the total: the stops above it usually shorten.") {
+                        HStack(spacing: 16) {
+                            Stepper("30 m+ : \(m.extStopDeep) min",
+                                    value: $m.extStopDeep, in: 0...10)
+                                .frame(maxWidth: 260)
+                        }
+                        HStack(spacing: 16) {
+                            Stepper("7–30 m : \(m.extStopShallow) min",
+                                    value: $m.extStopShallow, in: 0...10)
+                                .frame(maxWidth: 260)
+                        }
                     }
                     group("Deco gas limits",
                           help: "The planner auto-selects the deco gas with the highest PO2 that stays within Max PO2 and Max END. Set Max PO2 to 1.6 if you want 100% O2 at the 20 ft / 6 m stop; tune it down to lower CNS exposure at the cost of longer deco.") {

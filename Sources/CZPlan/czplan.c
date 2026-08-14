@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.8.3"
+#define ZP_VERSION "1.9.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -501,6 +501,16 @@ static int best_deco_gas(const sim *s, double depth_m) {
     return best;
 }
 
+/* Extra hold, in minutes, for a deco mix switch happening at this depth.
+ * Bands are fixed in metres regardless of the display units: 7 m up to 30 m,
+ * and 30 m or deeper. A switch shallower than 7 m is not extended — the diver
+ * is already holding a long final stop there. */
+static double ext_stop_for(const zp_config *c, double depth_m) {
+    if (depth_m >= 30.0 - 1e-9) return c->ext_stop_deep_min;
+    if (depth_m >= 7.0  - 1e-9) return c->ext_stop_shallow_min;
+    return 0.0;
+}
+
 /* deco setpoint for a depth (CC deco), or -1 if none applies */
 static double deco_setpoint_for(const zp_config *c, double depth) {
     if (!c->use_deco_setpoint) return -1;
@@ -756,9 +766,21 @@ static int run_plan(const zp_config *cfg, zp_result *out,
                  s->cc != pre_cc) && out->n_lines < ZP_MAX_PLAN_LINES) {
                 /* Record the switch so the plan shows where it happens. It is
                  * not a stop, so it carries no time. */
+                /* Extended stop on the switch, if configured for this band.
+                 * Held before the line is filled in so runtime is the time the
+                 * diver leaves, matching every other stop line. */
+                double ext = ext_stop_for(cfg, s->depth);
+                if (ext > 1e-9) {
+                    double left = ext;
+                    while (left > 1e-9) {
+                        double dt = left < DT ? left : DT;
+                        tick(s, s->depth, dt, false); left -= dt;
+                    }
+                    out->total_deco_min += ext;
+                }
                 zp_plan_line *L = &out->lines[out->n_lines++];
                 L->kind = ZP_LINE_GASSWITCH; L->depth_m = s->depth;
-                L->stop_sec = 0; L->runtime_min = s->runtime;
+                L->stop_sec = ext * 60.0; L->runtime_min = s->runtime;
                 L->fo2 = s->fo2; L->fhe = s->fhe; L->cc = s->cc;
                 L->setpoint = s->setpoint;
                 L->ppo2 = display_ppo2(s, s->depth);
@@ -775,7 +797,12 @@ static int run_plan(const zp_config *cfg, zp_result *out,
 
         if (!s->rmv_switched) { s->rmv = cfg->deco_rmv_l_min; s->rmv_switched = 1; }
         if (s->gf_ref_depth <= 0) s->gf_ref_depth = here;
+        double stop_pre_fo2 = s->fo2, stop_pre_fhe = s->fhe;
+        bool stop_pre_cc = s->cc;
         select_deco_source(s, s->depth);
+        bool switched_here = fabs(s->fo2 - stop_pre_fo2) > 1e-6 ||
+                             fabs(s->fhe - stop_pre_fhe) > 1e-6 ||
+                             s->cc != stop_pre_cc;
 
         double quantum = 1.0;                    /* whole-minute stops */
         if (here <= last_stop + 1e-9 && cfg->deepstops != ZP_DEEPSTOPS_NONE)
@@ -784,6 +811,13 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         for (int mi = 0; mi < n_min; mi++)
             if (fabs(min_hold[mi].depth - here) < 1e-6)
                 min_time = min_hold[mi].time_min;
+        /* Extended stop on a deco mix switch: hold at least this long here.
+         * Going through min_time rather than adding afterwards means the extra
+         * time also off-gasses the diver, so the stops above it shorten. */
+        if (switched_here) {
+            double ext = ext_stop_for(cfg, here);
+            if (ext > min_time) min_time = ext;
+        }
 
         double arrive_rt = s->runtime;   /* for whole-minute rounding below */
         double stop_time = 0;
@@ -1118,6 +1152,14 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 }
             }
             else if (!strcmp(key, "ocdecomaxpo2")) cfg->oc_deco_max_po2 = atof(val);
+            else if (!strcmp(key, "extstopshallow")) {
+                double v = atof(val); if (v < 0) v = 0; if (v > 10) v = 10;
+                cfg->ext_stop_shallow_min = v;
+            }
+            else if (!strcmp(key, "extstopdeep")) {
+                double v = atof(val); if (v < 0) v = 0; if (v > 10) v = 10;
+                cfg->ext_stop_deep_min = v;
+            }
             else if (!strcmp(key, "maxend")) cfg->max_end_m = atof(val) * d2m;
             else if (!strcmp(key, "descentrate") || !strcmp(key, "ascentrate")) {
                 double a, b, r;
@@ -1259,8 +1301,11 @@ int zp_report(const zp_config *cfg, const zp_result *res,
             }
             if (L->kind == ZP_LINE_GASSWITCH) {
                 /* Same columns as a stop, marked Gas and carrying no time. */
+                double hold = L->stop_sec / 60.0;
+                int gm = (int)hold, gs = (int)((hold - gm) * 60 + 0.5);
+                if (gs == 60) { gm++; gs = 0; }
                 APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-11s %4.2f %4.0f%-2s\n",
-                    "Gas  ", L->depth_m * dscale, du, 0, 0,
+                    "Gas  ", L->depth_m * dscale, du, gm, gs,
                     ceil(L->runtime_min - 1e-6), gas,
                     L->ppo2, L->ead_m * dscale, du);
                 prev_end = L->runtime_min; prev_depth = L->depth_m;

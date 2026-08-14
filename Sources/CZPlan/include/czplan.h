@@ -86,6 +86,11 @@ typedef struct {
     int    n_oc_deco;
     double oc_deco_max_po2;
     double max_end_m;
+    /* Extended stops on a deco mix switch. When the planner switches to a deco
+     * gas, it holds at that depth for these extra minutes (0-10). The band is
+     * chosen by the depth of the switch; switches shallower than 7 m get none. */
+    double ext_stop_shallow_min;   /* switch at 7 m up to 30 m */
+    double ext_stop_deep_min;      /* switch at 30 m or deeper */
     zp_rate_range descent[ZP_MAX_RATES]; int n_descent;
     zp_rate_range ascent [ZP_MAX_RATES]; int n_ascent;
     bool   use_deco_setpoint;
