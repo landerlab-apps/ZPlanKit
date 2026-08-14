@@ -5,6 +5,7 @@
 //  Top bar: Config · Log · Calculate.
 //  iPhone: two tabs (Dive entry / Plan). Mac: side-by-side.
 //
+import Combine
 import SwiftUI
 import ZPlanKit
 #if os(macOS)
@@ -43,8 +44,8 @@ public struct Disclaimer {
 
 // MARK: - Model
 
-struct DiveLevel: Identifiable {
-    let id = UUID()
+struct DiveLevel: Identifiable, Codable {
+    var id = UUID()
     var enabled = true
     var d = "", t = "", o2 = "", he = "", set = "", sld = ""
     var summary: String {
@@ -71,33 +72,62 @@ struct LogEntry: Identifiable, Codable {
     }
 }
 
-/// The log is written to disk so it survives quitting the app. It previously
-/// lived only in memory, so every entry was lost on close.
-enum LogStore {
-    private static var url: URL? {
+/// Everything the diver typed in: levels, gases and every Config setting.
+///
+/// The whole lot is stored together deliberately. Levels alone would be unsafe
+/// to restore — a level of "45" means 45 m or 45 ft depending on `depthsMetric`,
+/// so restoring dive data without the units that were in force when it was
+/// entered could silently reinterpret a 45 m dive as 45 ft.
+struct PlannerState: Codable {
+    var depthsMetric = true, rmvMetric = true, saltWater = true, o2Narcotic = false
+    var model = "c"
+    var useGF = false, gfLow = "30", gfHigh = "85", altGfLow = "90", altGfHigh = "90"
+    var extraSlow = false, ndlLow = false
+    var altitude = "0", conservatism = 10.0
+    var deepStops = "p", pyleTime = 1, stopDistance = "3", lastStop = "3"
+    var descentRates = "0-100, 15"
+    var ascentRates = "70-30, 18\n30-12, 9\n12-0, 3"
+    var decoSetpoints = "", slideRate = "0.1", maxPO2 = "1.6", maxEND = "40"
+    var bottomRMV = "19", decoRMV = "14"
+    var si48 = false, si24 = false, siActual = ""
+    var decoGasesOn = true, decoGases = "50"
+    var circuitClosed = false, plus3m = false, plus5min = false, useAltGF = false
+    var levels: [DiveLevel] = []
+}
+
+/// Files under Application Support/Lplanner. Both the log and the entered dive
+/// state previously lived only in memory and were lost when the app closed.
+enum Store {
+    private static func url(_ name: String) -> URL? {
         guard let dir = try? FileManager.default.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true) else { return nil }
         let app = dir.appendingPathComponent("Lplanner", isDirectory: true)
         try? FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
-        return app.appendingPathComponent("log.json")
+        return app.appendingPathComponent(name)
     }
 
-    static func load() -> [LogEntry] {
-        guard let url, let data = try? Data(contentsOf: url) else { return [] }
+    private static func read<T: Decodable>(_ name: String, _ type: T.Type) -> T? {
+        guard let u = url(name), let d = try? Data(contentsOf: u) else { return nil }
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
-        return (try? dec.decode([LogEntry].self, from: data)) ?? []
+        return try? dec.decode(T.self, from: d)
     }
 
-    static func save(_ entries: [LogEntry]) {
-        guard let url else { return }
+    private static func write<T: Encodable>(_ name: String, _ value: T) {
+        guard let u = url(name) else { return }
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         enc.outputFormatting = .prettyPrinted
-        guard let data = try? enc.encode(entries) else { return }
-        try? data.write(to: url, options: .atomic)
+        guard let d = try? enc.encode(value) else { return }
+        try? d.write(to: u, options: .atomic)
     }
+
+    // A corrupt file must never stop the planner starting, hence the defaults.
+    static func loadLog() -> [LogEntry] { read("log.json", [LogEntry].self) ?? [] }
+    static func saveLog(_ e: [LogEntry]) { write("log.json", e) }
+    static func loadState() -> PlannerState { read("state.json", PlannerState.self) ?? PlannerState() }
+    static func saveState(_ s: PlannerState) { write("state.json", s) }
 }
 
 final class PlannerModel: ObservableObject {
@@ -146,8 +176,66 @@ final class PlannerModel: ObservableObject {
     @Published var planText = ""
     @Published var notes = ""
     /// Restored from disk so the log survives quitting the app.
-    @Published var log: [LogEntry] = LogStore.load()
+    @Published var log: [LogEntry] = Store.loadLog()
     private var lastTissue: String? = nil
+    private var autosave: AnyCancellable?
+
+    init() {
+        apply(Store.loadState())
+        // objectWillChange fires before the property is written, so the debounce
+        // both coalesces bursts of typing and guarantees we snapshot after the
+        // change has landed. Covers every field without per-property plumbing.
+        autosave = objectWillChange
+            .debounce(for: .seconds(1), scheduler: RunLoop.main)
+            .sink { [weak self] in self?.saveState() }
+    }
+
+    private func apply(_ s: PlannerState) {
+        depthsMetric = s.depthsMetric; rmvMetric = s.rmvMetric
+        saltWater = s.saltWater; o2Narcotic = s.o2Narcotic
+        model = s.model
+        useGF = s.useGF; gfLow = s.gfLow; gfHigh = s.gfHigh
+        altGfLow = s.altGfLow; altGfHigh = s.altGfHigh
+        extraSlow = s.extraSlow; ndlLow = s.ndlLow
+        altitude = s.altitude; conservatism = s.conservatism
+        deepStops = s.deepStops; pyleTime = s.pyleTime
+        stopDistance = s.stopDistance; lastStop = s.lastStop
+        descentRates = s.descentRates; ascentRates = s.ascentRates
+        decoSetpoints = s.decoSetpoints; slideRate = s.slideRate
+        maxPO2 = s.maxPO2; maxEND = s.maxEND
+        bottomRMV = s.bottomRMV; decoRMV = s.decoRMV
+        si48 = s.si48; si24 = s.si24; siActual = s.siActual
+        decoGasesOn = s.decoGasesOn; decoGases = s.decoGases
+        circuitClosed = s.circuitClosed
+        plus3m = s.plus3m; plus5min = s.plus5min; useAltGF = s.useAltGF
+        levels = s.levels
+    }
+
+    private var snapshot: PlannerState {
+        var s = PlannerState()
+        s.depthsMetric = depthsMetric; s.rmvMetric = rmvMetric
+        s.saltWater = saltWater; s.o2Narcotic = o2Narcotic
+        s.model = model
+        s.useGF = useGF; s.gfLow = gfLow; s.gfHigh = gfHigh
+        s.altGfLow = altGfLow; s.altGfHigh = altGfHigh
+        s.extraSlow = extraSlow; s.ndlLow = ndlLow
+        s.altitude = altitude; s.conservatism = conservatism
+        s.deepStops = deepStops; s.pyleTime = pyleTime
+        s.stopDistance = stopDistance; s.lastStop = lastStop
+        s.descentRates = descentRates; s.ascentRates = ascentRates
+        s.decoSetpoints = decoSetpoints; s.slideRate = slideRate
+        s.maxPO2 = maxPO2; s.maxEND = maxEND
+        s.bottomRMV = bottomRMV; s.decoRMV = decoRMV
+        s.si48 = si48; s.si24 = si24; s.siActual = siActual
+        s.decoGasesOn = decoGasesOn; s.decoGases = decoGases
+        s.circuitClosed = circuitClosed
+        s.plus3m = plus3m; s.plus5min = plus5min; s.useAltGF = useAltGF
+        s.levels = levels
+        return s
+    }
+
+    /// Write the entered dive state to disk. Also called on the way out.
+    func saveState() { Store.saveState(snapshot) }
 
     var repetitive: Bool { si48 || si24 || !siActual.isEmpty }
     var surfaceInterval: String {
@@ -321,21 +409,21 @@ final class PlannerModel: ObservableObject {
         guard !planText.isEmpty else { return }
         if log.first?.text == planText { return }   // don't stack duplicates
         log.insert(LogEntry(summary: diveSummary, text: planText), at: 0)
-        LogStore.save(log)
+        Store.saveLog(log)
     }
 
     func removeLog(_ e: LogEntry) {
         log.removeAll { $0.id == e.id }
-        LogStore.save(log)
+        Store.saveLog(log)
     }
 
     func clearLog() {
         log.removeAll()
-        LogStore.save(log)
+        Store.saveLog(log)
     }
 
     /// Persist after a swipe-to-delete, which mutates `log` directly.
-    func persistLog() { LogStore.save(log) }
+    func persistLog() { Store.saveLog(log) }
 }
 
 // MARK: - Root
@@ -345,6 +433,7 @@ public struct ZPlannerView: View {
     @State private var showConfig = false
     @State private var showLog = false
     @State private var showInfo = false
+    @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
     #endif
@@ -368,6 +457,11 @@ public struct ZPlannerView: View {
         .sheet(isPresented: $showConfig) { ConfigSheet(m: m) }
         .sheet(isPresented: $showLog) { LogSheet(m: m) }
         .sheet(isPresented: $showInfo) { infoSheet }
+        // The autosave is debounced by a second, so flush on the way out in case
+        // the app is closed immediately after the last edit.
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { m.saveState() }
+        }
     }
 
     private var compact: Bool {
