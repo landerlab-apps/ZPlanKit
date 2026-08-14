@@ -1,5 +1,13 @@
 # ZPlanKit v1.8.1
 
+> **WARNING**
+>
+> This generated dive schedule could indirectly kill you and probably has bugs.
+> The author does not warrant that it accurately reflects A. A. Buhlmann's
+> algorithm or VVAL-18 algorithm. This dive schedule is experimental, and you
+> use it at your own risk.
+
+
 A clean-room reimplementation of **ZPlan v1.03** (© 1997–98 William M. Smithers) —
 the classic Bühlmann ZHL-16 mixed-gas decompression planner — as a portable
 C99 engine with a Swift API, building natively for **macOS** and **iOS**

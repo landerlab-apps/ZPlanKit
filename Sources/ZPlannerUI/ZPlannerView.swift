@@ -25,6 +25,22 @@ func printPlan(_ text: String) {
 }
 #endif
 
+// MARK: - Disclaimer
+
+/// Shown by the Info button and reproduced in the documentation of every build.
+/// `algorithms` names the models the build actually ships, so Lplanner79 says
+/// VVAL-79 rather than VVAL-18.
+public struct Disclaimer {
+    public static var algorithms = "A. A. Buhlmann's algorithm or VVAL-18 algorithm"
+
+    public static var text: String {
+        "This generated dive schedule could indirectly kill you and probably has "
+        + "bugs. The author does not warrant that it accurately reflects "
+        + algorithms + ". This dive schedule is experimental, and you use it at "
+        + "your own risk."
+    }
+}
+
 // MARK: - Model
 
 struct DiveLevel: Identifiable {
@@ -40,9 +56,9 @@ struct DiveLevel: Identifiable {
     }
 }
 
-struct LogEntry: Identifiable {
-    let id = UUID()
-    let date = Date()
+struct LogEntry: Identifiable, Codable {
+    var id = UUID()
+    var date = Date()
     /// Which dive and settings produced this plan, so entries are identifiable.
     let summary: String
     let text: String
@@ -52,6 +68,35 @@ struct LogEntry: Identifiable {
         let f = DateFormatter()
         f.dateFormat = "d MMM  HH:mm"
         return f.string(from: date)
+    }
+}
+
+/// The log is written to disk so it survives quitting the app. It previously
+/// lived only in memory, so every entry was lost on close.
+enum LogStore {
+    private static var url: URL? {
+        guard let dir = try? FileManager.default.url(
+            for: .applicationSupportDirectory, in: .userDomainMask,
+            appropriateFor: nil, create: true) else { return nil }
+        let app = dir.appendingPathComponent("Lplanner", isDirectory: true)
+        try? FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        return app.appendingPathComponent("log.json")
+    }
+
+    static func load() -> [LogEntry] {
+        guard let url, let data = try? Data(contentsOf: url) else { return [] }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return (try? dec.decode([LogEntry].self, from: data)) ?? []
+    }
+
+    static func save(_ entries: [LogEntry]) {
+        guard let url else { return }
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = .prettyPrinted
+        guard let data = try? enc.encode(entries) else { return }
+        try? data.write(to: url, options: .atomic)
     }
 }
 
@@ -100,7 +145,8 @@ final class PlannerModel: ObservableObject {
     // ---- Output ----
     @Published var planText = ""
     @Published var notes = ""
-    @Published var log: [LogEntry] = []
+    /// Restored from disk so the log survives quitting the app.
+    @Published var log: [LogEntry] = LogStore.load()
     private var lastTissue: String? = nil
 
     var repetitive: Bool { si48 || si24 || !siActual.isEmpty }
@@ -275,11 +321,21 @@ final class PlannerModel: ObservableObject {
         guard !planText.isEmpty else { return }
         if log.first?.text == planText { return }   // don't stack duplicates
         log.insert(LogEntry(summary: diveSummary, text: planText), at: 0)
+        LogStore.save(log)
     }
 
-    func removeLog(_ e: LogEntry) { log.removeAll { $0.id == e.id } }
+    func removeLog(_ e: LogEntry) {
+        log.removeAll { $0.id == e.id }
+        LogStore.save(log)
+    }
 
-    func clearLog() { log.removeAll() }
+    func clearLog() {
+        log.removeAll()
+        LogStore.save(log)
+    }
+
+    /// Persist after a swipe-to-delete, which mutates `log` directly.
+    func persistLog() { LogStore.save(log) }
 }
 
 // MARK: - Root
@@ -288,6 +344,7 @@ public struct ZPlannerView: View {
     @StateObject private var m = PlannerModel()
     @State private var showConfig = false
     @State private var showLog = false
+    @State private var showInfo = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
     #endif
@@ -310,6 +367,7 @@ public struct ZPlannerView: View {
         .foregroundColor(.black)
         .sheet(isPresented: $showConfig) { ConfigSheet(m: m) }
         .sheet(isPresented: $showLog) { LogSheet(m: m) }
+        .sheet(isPresented: $showInfo) { infoSheet }
     }
 
     private var compact: Bool {
@@ -356,8 +414,30 @@ public struct ZPlannerView: View {
                 barButton("Print", "printer") { printPlan(m.planText) }
                 #endif
             }
+            // Always available, whether or not a plan has been calculated.
+            barButton("Info", "info.circle") { showInfo = true }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    private var infoSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Lplanner").font(.title3.bold())
+                Spacer()
+                Button("Done") { showInfo = false }.keyboardShortcut(.defaultAction)
+            }
+            Text(Disclaimer.text)
+                .foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            Text("Engine ZPlanKit \(ZPlan.version)")
+                .font(.caption).foregroundColor(.gray)
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .frame(minWidth: 340, maxWidth: 460)
+        .background(Color.white)
     }
 
 
@@ -735,6 +815,7 @@ struct LogSheet: View {
                         }
                         .onDelete { idx in
                             for i in idx.sorted(by: >) { m.log.remove(at: i) }
+                            m.persistLog()
                         }
                     }
                 }
