@@ -1,0 +1,26 @@
+# 55m/20min trimix 18/30 example, salt water, OC deco on EAN32/50/O2
+UseMetric: y
+SaltWater: y
+UseBValues: y
+Altitude: 0
+Conservatism: 10
+Precision: 1
+StopDistance: 3
+LastStopDepth: 3
+OxyNarc: n
+DeepStops: p
+PyleStopTime: 1
+TissueFile: tissue.dat
+SurfaceInterval: 900:00
+PlanFile: plan.out
+Rmv: 19
+DecoRmv: 14
+SlideRate: 0.1
+UseOCDeco: y
+OcDecoGas: 32, 50, 100
+OcDecoMaxPO2: 1.6
+MaxEND: 30
+DescentRate: 0-100, 20
+AscentRate: 100-0, 9
+UseDecoSetpoint: n
+55, 20, 18/30

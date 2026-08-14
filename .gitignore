@@ -1,0 +1,6 @@
+.DS_Store
+.build/
+.swiftpm/xcode/
+*.o
+*.out
+plan.out.tmp

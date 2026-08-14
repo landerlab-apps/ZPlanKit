@@ -1,0 +1,28 @@
+UseMetric: y
+SaltWater: n
+UseBValues: y
+DebugLevel: 0
+Altitude: 0
+Conservatism: 20
+Precision: 1
+StopDistance: 3
+LastStopDepth: 3
+OxyNarc: y
+DeepStops: p
+PyleStopTime: 1
+TissueFile: tissue.dat
+SurfaceInterval: 48:00
+PlanFile: DecoProf.txt
+Rmv: 19
+DecoRmv: 14
+SlideRate: 0.1
+UseOCDeco: n
+OcDecoGas:
+OcDecoMaxPO2: 1.6
+MaxEND: 40
+DescentRate: 0-100, 15
+AscentRate: 70-30, 18
+AscentRate: 30-12,9
+AscentRate: 12-0,3
+UseDecoSetpoint: n
+40, 20, 21

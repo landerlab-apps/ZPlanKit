@@ -1,0 +1,21 @@
+UseMetric: n
+RmvMetric: n
+SaltWater: y
+Model: vval18
+Altitude: 0
+Conservatism: 0
+StopDistance: 10
+LastStopDepth: 20
+OxyNarc: n
+DeepStops: n
+TissueFile:
+SurfaceInterval: 900:00
+Rmv: 0.7
+DecoRmv: 0.6
+UseOCDeco: n
+OcDecoGas:
+OcDecoMaxPO2: 1.6
+MaxEND: 200
+DescentRate: 0-400, 75
+AscentRate: 400-0, 30
+100, 40, 21
