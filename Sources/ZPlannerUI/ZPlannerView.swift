@@ -120,6 +120,16 @@ struct PlannerState: Codable {
     var decoGasesOn = true, decoGases = "50"
     var circuitClosed = false, plus3m = false, plus5min = false, useAltGF = false
     var levels: [DiveLevel] = []
+
+    /// Residual inert gas carried between sessions.
+    ///
+    /// `baselineTissue` is the diver's loading at the START of the dive being
+    /// planned, in tissue.dat format, with the wall-clock time it was recorded.
+    /// Storing the state *before* the current dive rather than after it is what
+    /// lets a plan be edited and recalculated any number of times without the
+    /// dive stacking on top of itself.
+    var baselineTissue: String? = nil
+    var baselineDate: Date? = nil
 }
 
 /// Files under Application Support/Lplanner. Both the log and the entered dive
@@ -204,7 +214,11 @@ final class PlannerModel: ObservableObject {
     @Published var notes = ""
     /// Restored from disk so the log survives quitting the app.
     @Published var log: [LogEntry] = Store.loadLog()
-    private var lastTissue: String? = nil
+    /// Loading at the start of the dive being planned; survives quitting.
+    @Published var baselineTissue: String? = nil
+    @Published var baselineDate: Date? = nil
+    /// Loading at the END of the most recent calculation, not yet committed.
+    private var resultTissue: String? = nil
     private var autosave: AnyCancellable?
 
     init() {
@@ -236,6 +250,8 @@ final class PlannerModel: ObservableObject {
         circuitClosed = s.circuitClosed
         plus3m = s.plus3m; plus5min = s.plus5min; useAltGF = s.useAltGF
         levels = s.levels
+        baselineTissue = s.baselineTissue
+        baselineDate = s.baselineDate
     }
 
     private var snapshot: PlannerState {
@@ -258,17 +274,38 @@ final class PlannerModel: ObservableObject {
         s.circuitClosed = circuitClosed
         s.plus3m = plus3m; s.plus5min = plus5min; s.useAltGF = useAltGF
         s.levels = levels
+        s.baselineTissue = baselineTissue
+        s.baselineDate = baselineDate
         return s
     }
 
     /// Write the entered dive state to disk. Also called on the way out.
     func saveState() { Store.saveState(snapshot) }
 
+    /// True when residual loading from an earlier dive is being carried.
+    var hasResidual: Bool { baselineTissue != nil }
+
+    /// Real time since the residual was recorded, in minutes.
+    var elapsedMinutes: Double {
+        guard let d = baselineDate else { return 0 }
+        return max(0, Date().timeIntervalSince(d) / 60.0)
+    }
+
+    var elapsedText: String {
+        let m = Int(elapsedMinutes.rounded())
+        return String(format: "%d:%02d", m / 60, m % 60)
+    }
+
     var repetitive: Bool { si48 || si24 || !siActual.isEmpty }
+
+    /// A typed surface interval wins, so what-if planning still works. Otherwise
+    /// the real elapsed time since the residual was recorded is used, which is
+    /// what makes the tracking advance while the app is closed.
     var surfaceInterval: String {
         if !siActual.isEmpty { return siActual }
         if si48 { return "48:00" }
         if si24 { return "24:00" }
+        if hasResidual { return elapsedText }
         return "900:00"
     }
 
@@ -375,11 +412,13 @@ final class PlannerModel: ObservableObject {
             return
         }
         do {
-            let r = try ZPlan.plan(profile: profileText,
-                                   tissueFile: repetitive ? lastTissue : nil)
+            // Always planned from the baseline, never from the previous
+            // result. Recalculating an edited dive therefore never stacks the
+            // dive on top of itself.
+            let r = try ZPlan.plan(profile: profileText, tissueFile: baselineTissue)
             planText = r.reportText
             notes = r.warnings
-            lastTissue = r.tissueState.tissueFileText
+            resultTissue = r.tissueState.tissueFileText
             // Log at the moment of calculation. Logging used to happen when the
             // Log button was pressed, which saved whatever planText happened to
             // hold — i.e. the previous calculation if any setting had changed
@@ -455,6 +494,27 @@ final class PlannerModel: ObservableObject {
 
     /// Persist after a swipe-to-delete, which mutates `log` directly.
     func persistLog() { Store.saveLog(log) }
+
+    /// Carry the loading from the calculated dive forward, timestamped now.
+    /// Deliberately explicit: calculating a plan must not commit tissue, or
+    /// editing and recalculating one dive would compound onto itself.
+    func commitDive() {
+        guard let t = resultTissue else { return }
+        baselineTissue = t
+        baselineDate = Date()
+        siActual = ""; si24 = false; si48 = false
+        saveState()
+    }
+
+    /// Declare the diver clean again.
+    func clearTissues() {
+        baselineTissue = nil
+        baselineDate = nil
+        resultTissue = nil
+        saveState()
+    }
+
+    var canCommit: Bool { resultTissue != nil }
 }
 
 // MARK: - Root
@@ -609,16 +669,37 @@ public struct ZPlannerView: View {
 
     // ---- Surface Interval row ----
     private var siRow: some View {
-        HStack(spacing: 12) {
-            Text("Surface Interval").font(.callout)
-            check("48 hr", isOn: Binding(get: { m.si48 },
-                set: { m.si48 = $0; if $0 { m.si24 = false } }))
-            check("24 hr", isOn: Binding(get: { m.si24 },
-                set: { m.si24 = $0; if $0 { m.si48 = false } }))
-            Text("Actual:")
-            TextField("_:__", text: $m.siActual)
-                .textFieldStyle(.roundedBorder).frame(width: 70)
-            Spacer()
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Text("Surface Interval").font(.callout)
+                check("48 hr", isOn: Binding(get: { m.si48 },
+                    set: { m.si48 = $0; if $0 { m.si24 = false } }))
+                check("24 hr", isOn: Binding(get: { m.si24 },
+                    set: { m.si24 = $0; if $0 { m.si48 = false } }))
+                Text("Actual:")
+                TextField(m.hasResidual ? m.elapsedText : "_:__", text: $m.siActual)
+                    .textFieldStyle(.roundedBorder).frame(width: 70)
+                Spacer()
+            }
+            // Residual loading must be visible. A schedule that silently depends
+            // on an earlier dive is exactly the kind of thing a diver has to be
+            // able to see and cancel.
+            HStack(spacing: 10) {
+                if m.hasResidual {
+                    Text("Residual gas carried — surfaced \(m.elapsedText) ago")
+                        .font(.caption).foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
+                    Button("Clear") { m.clearTissues() }
+                        .buttonStyle(.plain).font(.caption).underline()
+                } else {
+                    Text("No residual gas — planning clean")
+                        .font(.caption).foregroundColor(.gray)
+                }
+                if m.canCommit {
+                    Button("Dive done \u{2192} carry gas forward") { m.commitDive() }
+                        .buttonStyle(.plain).font(.caption).underline()
+                }
+                Spacer()
+            }
         }.padding(.horizontal, 12).padding(.vertical, 6)
     }
 
