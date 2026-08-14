@@ -77,13 +77,13 @@ public struct Manual {
     ENTERING A DIVE
     Type Depth, Time and O2 % — plus He % for trimix — then press Add >>. \
     Repeat for each level. Tap a level to edit it, use the arrows to reorder, \
-    × to remove. Untick a level to leave it out without deleting it.
+    × to remove. Click a level's box to leave it out without deleting it.
 
     CLOSED CIRCUIT
     Switch to Closed to show Set (setpoint) and Sld (Scamahorn slide).
 
     DECO GASES
-    Tick Yes and list the mixes, e.g. 50, 100. The planner picks the richest \
+    Click Yes and list the mixes, e.g. 50, 100. The planner picks the richest \
     one allowed by Max PO2 and Max END.
 
     CONFIG
@@ -642,20 +642,15 @@ public struct ZPlannerView: View {
             barButton("Config", "gearshape") { showConfig = true }
             // Log is now purely a viewer — entries are recorded by Calculate.
             barButton("Log", "book") { showLog = true }
-            VStack(spacing: 1) {
-                Button(action: m.calculate) {
-                    Text("Calculate")
-                        .font(.headline)
-                        .padding(.horizontal, 18).padding(.vertical, 7)
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black, lineWidth: 1.5))
-                }
-                .buttonStyle(.plain)
-                .disabled(!m.canCalculate)
-                .opacity(m.canCalculate ? 1 : 0.4)
-                // Always visible, so the guidance does not depend on opening Info.
-                Text("Use your exact SI time or a shorter duration")
-                    .font(.caption2)
+            Button(action: m.calculate) {
+                Text("Calculate")
+                    .font(.headline)
+                    .padding(.horizontal, 18).padding(.vertical, 7)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black, lineWidth: 1.5))
             }
+            .buttonStyle(.plain)
+            .disabled(!m.canCalculate)
+            .opacity(m.canCalculate ? 1 : 0.4)
             Spacer()
             // Share, Print and Info are permanent. Share and Print used to be
             // hidden until a plan existed, so the right-hand side of the bar
