@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.9.0"
+#define ZP_VERSION "1.9.1"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -718,12 +718,32 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         if (next_deep > 0 && next_deep < s->depth - 1e-9) {
             travel(s, next_deep, true);
             if (!s->rmv_switched) { s->rmv = cfg->deco_rmv_l_min; s->rmv_switched = 1; }
-            double t = deep[deep_idx].time_min;
+
+            /* v1.9.1: deep stops get the deco gas too, if one is permitted at
+             * this depth. They used to be breathed on back gas whatever the
+             * depth, so a Pyle stop at 18 m stayed on air even though EAN50 is
+             * usable from 21.6 m — throwing away exactly the oxygen window the
+             * switch exists to exploit, on the stops where the gradient is
+             * largest. The switch happens on arrival, so the hold itself and
+             * every stop above it are computed on the new mix. */
+            double pre_fo2 = s->fo2, pre_fhe = s->fhe; bool pre_cc = s->cc;
+            select_deco_source(s, s->depth);
+            bool switched = fabs(s->fo2 - pre_fo2) > 1e-6 ||
+                            fabs(s->fhe - pre_fhe) > 1e-6 || s->cc != pre_cc;
+
+            /* An extended stop configured for this band applies here as well. */
+            double hold = deep[deep_idx].time_min;
+            if (switched) {
+                double ext = ext_stop_for(cfg, s->depth);
+                if (ext > hold) hold = ext;
+            }
+
+            double t = hold;
             while (t > 1e-9) { double dt = t<DT?t:DT; tick(s,s->depth,dt,false); t-=dt; }
             if (out->n_lines < ZP_MAX_PLAN_LINES) {
                 zp_plan_line *L = &out->lines[out->n_lines++];
                 L->kind = ZP_LINE_DEEPSTOP; L->depth_m = s->depth;
-                L->stop_sec = deep[deep_idx].time_min * 60.0;
+                L->stop_sec = hold * 60.0;
                 L->runtime_min = s->runtime;
                 L->fo2 = s->fo2; L->fhe = s->fhe; L->cc = s->cc;
                 L->setpoint = s->setpoint;
@@ -731,7 +751,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
                 L->end_m = end_m(s, s->depth);
                 L->ead_m = ead_m(s, s->depth);
             }
-            out->total_deco_min += deep[deep_idx].time_min;
+            out->total_deco_min += hold;
             deep_idx++;
             continue;
         }

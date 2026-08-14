@@ -1,4 +1,4 @@
-# ZPlanKit v1.9.0
+# ZPlanKit v1.9.1
 
 > **WARNING**
 >
@@ -251,6 +251,17 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.9.1** (2026-08-14) — Pyle deep stops now use the deco gas when one is
+  permitted at that depth. The deep-stop branch travelled, held and continued
+  without ever calling `select_deco_source()`, so every deep stop was breathed
+  on back gas regardless of depth: with EAN50 at MaxPO2 1.6 (MOD 21.6 m) the
+  18 m Pyle stop stayed on air, throwing away the oxygen window on precisely
+  the stops where the gradient is largest. The switch now happens on arrival,
+  so the hold itself and every stop above it are computed on the new mix — the
+  9 m stop fell from 4:31 to 3:13 on the test profile. Stops deeper than the
+  mix's MOD correctly stay on back gas, and an extended stop configured for the
+  band applies at a deep-stop switch as well.
+
 * **v1.9.0** (2026-08-14) — Extended stops on a deco mix switch. `ExtStopDeep`
   and `ExtStopShallow` (0-10 min each) hold the diver at the depth where the
   planner switches to a deco gas, chosen by band: 30 m or deeper, and 7 m up to
