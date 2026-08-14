@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.9.2"
+#define ZP_VERSION "1.9.3"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -407,12 +407,17 @@ static double gas_switch_depth(const sim *s, double to_m) {
     for (int i = 0; i < c->n_oc_deco; i++) {
         double fo2 = c->oc_deco_fo2[i];
         if (fo2 <= s->fo2 + 1e-6) continue;          /* no richer than current */
-        /* Exactly the MOD — no tolerance. The 0.2 m allowance in
-         * best_deco_gas() exists so a stop sitting a centimetre past the limit
-         * still qualifies; adding it here would put the diver on the mix
-         * deeper than its own MOD and show a PO2 above the configured maximum. */
+        /* The MOD, then snapped DOWN to the stop grid. Divers switch on the
+         * grid, not at a raw computed depth: EAN50 at 1.6 works out at 22.0 m,
+         * and the convention is to take the 21 m rung rather than argue about
+         * the last 0.6 m. Oxygen at 1.6 works out at 6.0 m and stays at 6 m.
+         * Snapping downward also guarantees the switch is never deeper than the
+         * mix allows. StopDistance drives the grid, so a CCR diver working in
+         * 6 m increments gets switches on 6 m rungs for free. */
         double max_pa = c->oc_deco_max_po2 / fo2 * P_SEALEVEL;
         double d = (max_pa - s->p_surface) / s->bar_per_m;
+        double grid = c->stop_distance_m > 0 ? c->stop_distance_m : 3.0;
+        d = floor(d / grid + 1e-9) * grid;
         double fnarc = (1.0 - fo2) + (c->oxy_narc ? fo2 : 0.0);
         double ref = c->oxy_narc ? 1.0 : 0.79;
         double p_end = (s->p_surface + d * s->bar_per_m) * fnarc / ref;

@@ -1,4 +1,4 @@
-# ZPlanKit v1.9.2
+# ZPlanKit v1.9.3
 
 > **WARNING**
 >
@@ -251,6 +251,15 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.9.3** (2026-08-14) — Gas switch depths snap down to the stop grid. The
+  raw MOD is a number like 22.0 m for EAN50 at 1.6; divers switch on the grid
+  and take the 21 m rung rather than argue about the last 0.6 m. Oxygen at 1.6
+  works out at 6.0 m and stays there. Snapping downward also guarantees the
+  switch is never deeper than the mix permits. `StopDistance` drives the grid,
+  so a CCR diver working in 6 m increments — a multiple of 3, chosen because a
+  rebreather cannot ascend quickly with the loop and counterlungs expanding —
+  gets switches on 6 m rungs without any extra setting.
+
 * **v1.9.2** (2026-08-14) — Gas switches happen at the mix's maximum operating
   depth, mid-water, rather than at whatever stop comes next. `travel()` now
   splits an ascent leg at any MOD it crosses, switches there and continues,
