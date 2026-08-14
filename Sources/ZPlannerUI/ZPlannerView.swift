@@ -69,6 +69,47 @@ public struct Disclaimer {
     }
 }
 
+// MARK: - Manual
+
+/// Short how-to shown in the Info sheet, under the disclaimer.
+public struct Manual {
+    public static let text = """
+    ENTERING A DIVE
+    Type Depth, Time and O2 % — plus He % for trimix — then press Add >>. \
+    Repeat for each level. Tap a level to edit it, use the arrows to reorder, \
+    × to remove. Untick a level to leave it out without deleting it.
+
+    CLOSED CIRCUIT
+    Switch to Closed to show Set (setpoint) and Sld (Scamahorn slide).
+
+    DECO GASES
+    Tick Yes and list the mixes, e.g. 50, 100. The planner picks the richest \
+    one allowed by Max PO2 and Max END.
+
+    CONFIG
+    Units, water, altitude, model, gradient factors, deep stops, ascent and \
+    descent rates, RMVs. Each section carries its own explanation.
+
+    SURFACE INTERVAL AND RESIDUAL GAS
+    After a dive press "Dive done" to carry your inert gas loading forward. \
+    It is kept when the app is closed and ages with real time. While gas is \
+    carried you must state a surface interval — 48 hr, 24 hr or Actual — \
+    before Calculate will work.
+
+    Always use your exact surface interval time or a shorter duration if \
+    you're uncertain about how long to wait between dives.
+
+    Press Clear to declare yourself clean again.
+
+    LOG
+    Every successful Calculate is recorded automatically, with the dive and \
+    settings that produced it. Swipe an entry to delete it, or press Clear.
+
+    SHARE AND PRINT
+    Both become available once a plan has been calculated.
+    """
+}
+
 // MARK: - Model
 
 struct DiveLevel: Identifiable, Codable {
@@ -611,10 +652,9 @@ public struct ZPlannerView: View {
                 .buttonStyle(.plain)
                 .disabled(!m.canCalculate)
                 .opacity(m.canCalculate ? 1 : 0.4)
-                // Always visible, so the caveat does not depend on opening Info.
-                Text("Experimental — verify before diving")
+                // Always visible, so the guidance does not depend on opening Info.
+                Text("Use your exact SI time or a shorter duration")
                     .font(.caption2)
-                    .foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
             }
             Spacer()
             // Share, Print and Info are permanent. Share and Print used to be
@@ -635,22 +675,32 @@ public struct ZPlannerView: View {
     }
 
     private var infoSheet: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Lplanner").font(.title3.bold())
                 Spacer()
                 Button("Done") { showInfo = false }.keyboardShortcut(.defaultAction)
             }
-            Text(Disclaimer.text)
-                .foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
-                .fixedSize(horizontal: false, vertical: true)
-            Divider()
-            Text(ZPlan.version)
-                .font(.caption).foregroundColor(.gray)
-            Spacer(minLength: 0)
+            .padding(.bottom, 14)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(Disclaimer.text)
+                        .foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Divider()
+                    Text(Manual.text)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Divider()
+                    Text(ZPlan.version)
+                        .font(.caption).foregroundColor(.gray)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(20)
-        .frame(minWidth: 340, maxWidth: 460)
+        .frame(minWidth: 340, maxWidth: 480, minHeight: 420)
         .background(Color.white)
     }
 
