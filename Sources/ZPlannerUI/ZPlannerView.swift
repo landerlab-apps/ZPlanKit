@@ -601,15 +601,21 @@ public struct ZPlannerView: View {
             barButton("Config", "gearshape") { showConfig = true }
             // Log is now purely a viewer — entries are recorded by Calculate.
             barButton("Log", "book") { showLog = true }
-            Button(action: m.calculate) {
-                Text("Calculate")
-                    .font(.headline)
-                    .padding(.horizontal, 18).padding(.vertical, 7)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black, lineWidth: 1.5))
+            VStack(spacing: 1) {
+                Button(action: m.calculate) {
+                    Text("Calculate")
+                        .font(.headline)
+                        .padding(.horizontal, 18).padding(.vertical, 7)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black, lineWidth: 1.5))
+                }
+                .buttonStyle(.plain)
+                .disabled(!m.canCalculate)
+                .opacity(m.canCalculate ? 1 : 0.4)
+                // Always visible, so the caveat does not depend on opening Info.
+                Text("Experimental — verify before diving")
+                    .font(.caption2)
+                    .foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
             }
-            .buttonStyle(.plain)
-            .disabled(!m.canCalculate)
-            .opacity(m.canCalculate ? 1 : 0.4)
             Spacer()
             // Share, Print and Info are permanent. Share and Print used to be
             // hidden until a plan existed, so the right-hand side of the bar
@@ -639,7 +645,7 @@ public struct ZPlannerView: View {
                 .foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
-            Text("Engine ZPlanKit \(ZPlan.version)")
+            Text(ZPlan.version)
                 .font(.caption).foregroundColor(.gray)
             Spacer(minLength: 0)
         }
