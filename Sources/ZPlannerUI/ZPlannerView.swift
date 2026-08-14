@@ -761,15 +761,21 @@ public struct ZPlannerView: View {
                          ? "Residual gas carried — surfaced \(m.elapsedText) ago"
                          : "Residual gas carried — set a surface interval to calculate")
                         .font(.caption).foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
-                    Button("Clear") { m.clearTissues() }
-                        .buttonStyle(.plain).font(.caption).underline()
+                    // underline() on a View needs iOS 16 / macOS 13; this target
+                    // deploys to iOS 15.6 / macOS 12.4, where it exists only on
+                    // Text. Hence the explicit label rather than Button("…").
+                    Button { m.clearTissues() } label: {
+                        Text("Clear").font(.caption).underline()
+                    }.buttonStyle(.plain)
                 } else {
                     Text("No residual gas — planning clean")
                         .font(.caption).foregroundColor(.gray)
                 }
                 if m.canCommit {
-                    Button("Dive done \u{2192} carry gas forward") { m.commitDive() }
-                        .buttonStyle(.plain).font(.caption).underline()
+                    Button { m.commitDive() } label: {
+                        Text("Dive done \u{2192} carry gas forward")
+                            .font(.caption).underline()
+                    }.buttonStyle(.plain)
                 }
                 Spacer()
             }
