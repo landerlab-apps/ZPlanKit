@@ -396,6 +396,9 @@ public struct ZPlannerView: View {
     }
 
     // ---- top bar: Config · Log · Calculate (left) · Share/Print (right) ----
+    /// No plan yet — Share and Print stay visible but inert.
+    private var noPlan: Bool { m.planText.isEmpty }
+
     private var topBar: some View {
         HStack(spacing: 10) {
             barButton("Config", "gearshape") { showConfig = true }
@@ -408,13 +411,18 @@ public struct ZPlannerView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black, lineWidth: 1.5))
             }.buttonStyle(.plain)
             Spacer()
-            if !m.planText.isEmpty {
-                shareButton
-                #if os(macOS)
-                barButton("Print", "printer") { printPlan(m.planText) }
-                #endif
-            }
-            // Always available, whether or not a plan has been calculated.
+            // Share, Print and Info are permanent. Share and Print used to be
+            // hidden until a plan existed, so the right-hand side of the bar
+            // changed shape after the first Calculate; they now stay put and
+            // simply dim while there is nothing to act on.
+            shareButton
+                .disabled(noPlan)
+                .opacity(noPlan ? 0.4 : 1)
+            #if os(macOS)
+            barButton("Print", "printer") { printPlan(m.planText) }
+                .disabled(noPlan)
+                .opacity(noPlan ? 0.4 : 1)
+            #endif
             barButton("Info", "info.circle") { showInfo = true }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
