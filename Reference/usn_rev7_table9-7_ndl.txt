@@ -1,0 +1,30 @@
+# U.S. Navy Diving Manual Revision 7, Table 9-7
+# No-Decompression Limits for No-Decompression Air Dives
+# These are VVal-79 / Thalmann EL-DCM derived limits (Rev 7, in service since 2017).
+# Acceptance reference for the VVAL-79 model. Depth in fsw, limit in minutes.
+#
+# depth_fsw  ndl_min
+10   unlimited
+15   unlimited
+20   unlimited
+25   1102
+30   371
+35   232
+40   163
+45   125
+50   92
+55   74
+60   63
+70   48
+80   39
+90   33
+100  25
+110  20
+120  15
+130  12
+140  10
+150  8
+160  7
+170  6
+180  6
+190  5
