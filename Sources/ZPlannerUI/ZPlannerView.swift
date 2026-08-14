@@ -680,8 +680,10 @@ public struct ZPlannerView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    // Monochrome throughout: emphasis comes from weight and
+                    // placement, never colour.
                     Text(Disclaimer.text)
-                        .foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
+                        .fontWeight(.semibold)
                         .fixedSize(horizontal: false, vertical: true)
                     Divider()
                     Text(Manual.text)
@@ -755,7 +757,7 @@ public struct ZPlannerView: View {
                     Text(m.canCalculate
                          ? "Residual gas carried — surfaced \(m.elapsedText) ago"
                          : "Residual gas carried — set a surface interval to calculate")
-                        .font(.caption).foregroundColor(Color(red: 0.69, green: 0, blue: 0.13))
+                        .font(.caption).fontWeight(.semibold)
                     // underline() on a View needs iOS 16 / macOS 13; this target
                     // deploys to iOS 15.6 / macOS 12.4, where it exists only on
                     // Text. Hence the explicit label rather than Button("…").

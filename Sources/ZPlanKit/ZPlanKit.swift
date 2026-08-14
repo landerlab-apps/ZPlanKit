@@ -26,7 +26,7 @@ public enum ZPlanError: Error, LocalizedError {
 
 /// One line of the dive plan (waypoint, deep stop, or normal stop).
 public struct PlanLine {
-    public enum Kind { case waypoint, deepStop, normStop }
+    public enum Kind { case waypoint, deepStop, normStop, gasSwitch }
     public let kind: Kind
     public let depthMeters: Double
     public let stopSeconds: Double     // time at depth, excluding travel
@@ -137,8 +137,9 @@ private extension DivePlan {
             for i in 0..<Int(r.n_lines) {
                 let L = p[i]
                 let kind: PlanLine.Kind =
-                    L.kind == ZP_LINE_WAYPOINT ? .waypoint :
-                    L.kind == ZP_LINE_DEEPSTOP ? .deepStop : .normStop
+                    L.kind == ZP_LINE_WAYPOINT  ? .waypoint  :
+                    L.kind == ZP_LINE_DEEPSTOP  ? .deepStop  :
+                    L.kind == ZP_LINE_GASSWITCH ? .gasSwitch : .normStop
                 out.append(PlanLine(kind: kind,
                                     depthMeters: L.depth_m,
                                     stopSeconds: L.stop_sec,

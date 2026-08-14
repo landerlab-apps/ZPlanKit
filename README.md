@@ -1,4 +1,4 @@
-# ZPlanKit v1.8.2
+# ZPlanKit v1.8.3
 
 > **WARNING**
 >
@@ -251,6 +251,16 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.8.3** (2026-08-14) — Deco gases now switch on the way up, not only at
+  stops. `select_deco_source()` was called in exactly one place — where a stop
+  was required — so a gas whose maximum operating depth was deeper than the
+  first stop never got picked up. With EAN50 at MaxPO2 1.6 (MOD 21.6 m) the
+  diver stayed on bottom gas past 21 m and only switched at the 9 m stop. The
+  check now runs at every stop-grid depth passed during the ascent.
+  Switches are recorded as a new `ZP_LINE_GASSWITCH` plan line and shown in the
+  report, because a switch at a pass-through depth produced no line at all and
+  so was invisible even once it was happening.
+
 * **v1.8.2** (2026-08-14) — Two report fixes found on an iPad CCR plan.
   Closed-circuit rows printed the diluent as well as the setpoint
   ("CC 21/0 SP 1.50"), 15 characters in an 11-column field, which pushed PO2 and

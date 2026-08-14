@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.8.2"
+#define ZP_VERSION "1.8.3"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -741,6 +741,30 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         if (can_leave(s, g)) {
             travel(s, g, true);
             if (g <= 1e-9) break;               /* surfaced */
+            /* v1.8.3: switch gas on the way up, not only at stops.
+             * select_deco_source() used to be called solely where a stop was
+             * required, so a gas whose maximum operating depth lay deeper than
+             * the first stop was never picked up: with EAN50 at MaxPO2 1.6 the
+             * diver stayed on bottom gas past 21 m and only switched at the
+             * 9 m stop. Divers switch at the MOD, so the check now runs at
+             * every stop-grid depth passed during the ascent. No guard is
+             * needed: best_deco_gas() returns -1 while still too deep for any
+             * listed gas, and select_deco_source() then keeps the bottom mix. */
+            double pre_fo2 = s->fo2, pre_fhe = s->fhe; bool pre_cc = s->cc;
+            select_deco_source(s, s->depth);
+            if ((fabs(s->fo2 - pre_fo2) > 1e-6 || fabs(s->fhe - pre_fhe) > 1e-6 ||
+                 s->cc != pre_cc) && out->n_lines < ZP_MAX_PLAN_LINES) {
+                /* Record the switch so the plan shows where it happens. It is
+                 * not a stop, so it carries no time. */
+                zp_plan_line *L = &out->lines[out->n_lines++];
+                L->kind = ZP_LINE_GASSWITCH; L->depth_m = s->depth;
+                L->stop_sec = 0; L->runtime_min = s->runtime;
+                L->fo2 = s->fo2; L->fhe = s->fhe; L->cc = s->cc;
+                L->setpoint = s->setpoint;
+                L->ppo2 = display_ppo2(s, s->depth);
+                L->end_m = end_m(s, s->depth);
+                L->ead_m = ead_m(s, s->depth);
+            }
             continue;                            /* passing through, no stop */
         }
 
@@ -1232,6 +1256,16 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                     L->depth_m * dscale, du, tm, ts2,
                     ceil(arrive - 1e-6),
                     (descending && gas_changed) ? gas : "");
+            }
+            if (L->kind == ZP_LINE_GASSWITCH) {
+                /* Same columns as a stop, marked Gas and carrying no time. */
+                APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-11s %4.2f %4.0f%-2s\n",
+                    "Gas  ", L->depth_m * dscale, du, 0, 0,
+                    ceil(L->runtime_min - 1e-6), gas,
+                    L->ppo2, L->ead_m * dscale, du);
+                prev_end = L->runtime_min; prev_depth = L->depth_m;
+                pfo2 = L->fo2; pfhe = L->fhe; pcc = (int)L->cc; psp = L->setpoint;
+                continue;
             }
             double disp = L->stop_sec / 60.0 + (fold ? travel : 0);
             int mm = (int)disp, ss = (int)((disp - mm) * 60 + 0.5);

@@ -101,7 +101,8 @@ typedef struct {
 } zp_config;
 
 typedef enum {
-    ZP_LINE_WAYPOINT, ZP_LINE_DEEPSTOP, ZP_LINE_NORMSTOP
+    ZP_LINE_WAYPOINT, ZP_LINE_DEEPSTOP, ZP_LINE_NORMSTOP,
+    ZP_LINE_GASSWITCH   /* gas changed while ascending, no stop here */
 } zp_line_kind;
 
 typedef struct {
