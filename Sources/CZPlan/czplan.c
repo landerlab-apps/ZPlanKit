@@ -623,6 +623,18 @@ static double deco_setpoint_for(const zp_config *c, double depth) {
 }
 
 /* choose breathing source for deco at a given depth (mutates s) */
+/* Choose what the diver is breathing at a deco depth.
+ *
+ * A closed-circuit dive may leave the loop for an open-circuit deco mix and
+ * later return to a deco setpoint. That is deliberate, not an oversight: US
+ * Navy practice permits shifting off the rig for decompression and back again,
+ * so a schedule that reads SP1.20 -> EAN50 -> SP1.30 is a real one. Do not
+ * "fix" this by suppressing OC deco gases on closed circuit.
+ *
+ * Precedence is: an explicit deco setpoint for this depth wins; a setpoint of
+ * zero means the range was declared open circuit; otherwise the richest deco
+ * gas within Max PO2 and Max END is taken if one qualifies; failing all of
+ * that, keep breathing whatever we already were. */
 static void select_deco_source(sim *s, double depth) {
     double sp = deco_setpoint_for(s->cfg, depth);
     if (sp > 0) { s->cc = true; s->setpoint = sp; return; }

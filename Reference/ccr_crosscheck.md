@@ -40,3 +40,10 @@ against raw ambient rather than alveolar, a difference confined to the last
 
 No change required to the closed-circuit model. Recorded here so this does not
 get re-derived a third time.
+
+## Open-circuit deco on a closed-circuit dive
+
+The planner will switch a CCR dive onto an open-circuit deco mix and later back
+to a deco setpoint — SP1.20 to EAN50 to SP1.30, say. This is intended. US Navy
+practice permits shifting off the rig for decompression and returning to it, so
+the schedule is a real one. Owner decision, 15 August 2026. Not a bug.
