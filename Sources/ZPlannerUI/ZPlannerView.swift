@@ -1,5 +1,5 @@
 //
-//  ZPlannerView.swift — v1.6.0
+//  ZPlannerView.swift — v1.7.0
 //
 //  Form-based planner front end. Monochrome, no graphics.
 //  Top bar: Config · Log · Calculate.
@@ -29,6 +29,13 @@ func printPlan(_ text: String) {
     let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: pageWidth, height: 1))
     tv.string = text
     tv.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+    // Paper is always light. Left to the semantic defaults, a plan printed in
+    // Dark Mode came out white on white — the text view resolves .textColor
+    // against the app's appearance, not the printer's.
+    tv.appearance = NSAppearance(named: .aqua)
+    tv.textColor = .black
+    tv.backgroundColor = .white
+    tv.drawsBackground = true
     tv.isVerticallyResizable = true
     tv.isHorizontallyResizable = false
 
@@ -52,6 +59,9 @@ func printPlan(_ text: String) {
 func printPlan(_ text: String) {
     let formatter = UISimpleTextPrintFormatter(text: text)
     formatter.font = UIFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+    // Explicit, for the same reason as the macOS path: paper is always light,
+    // so the ink must not follow the app's appearance.
+    formatter.color = .black
 
     let info = UIPrintInfo.printInfo()
     info.outputType = .general
@@ -74,6 +84,28 @@ func printPlan(_ text: String) {
     }
 }
 #endif
+
+
+// MARK: - Brand colours
+
+extension Color {
+    /// Page background, following the system appearance.
+    ///
+    /// The brand is monochrome, not "white". Hard-coding `Color.white` kept the
+    /// page light in Dark Mode while the text fields — which take their fill
+    /// from the system — went black, which is exactly what made the iPad
+    /// unreadable at night: black boxes on a white page.
+    ///
+    /// Everything else uses `.primary` / `.secondary`, which are greyscale in
+    /// both appearances and so cost the brand nothing.
+    static var planPaper: Color {
+        #if os(macOS)
+        Color(NSColor.textBackgroundColor)
+        #else
+        Color(UIColor.systemBackground)
+        #endif
+    }
+}
 
 // MARK: - Disclaimer
 
@@ -648,8 +680,8 @@ public struct ZPlannerView: View {
             Divider()
             content
         }
-        .background(Color.white.ignoresSafeArea())
-        .foregroundColor(.black)
+        .background(Color.planPaper.ignoresSafeArea())
+        .foregroundColor(.primary)
         .sheet(isPresented: $showConfig) { ConfigSheet(m: m) }
         .sheet(isPresented: $showLog) { LogSheet(m: m) }
         .sheet(isPresented: $showInfo) { infoSheet }
@@ -698,7 +730,7 @@ public struct ZPlannerView: View {
                 Text("Calculate")
                     .font(.headline)
                     .padding(.horizontal, 18).padding(.vertical, 7)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black, lineWidth: 1.5))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.primary, lineWidth: 1.5))
             }
             .buttonStyle(.plain)
             .disabled(!m.canCalculate)
@@ -743,14 +775,14 @@ public struct ZPlannerView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Divider()
                     Text(ZPlan.version)
-                        .font(.caption).foregroundColor(.gray)
+                        .font(.caption).foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(20)
         .frame(minWidth: 340, maxWidth: 480, minHeight: 420)
-        .background(Color.white)
+        .background(Color.planPaper)
     }
 
 
@@ -762,7 +794,7 @@ public struct ZPlannerView: View {
                     Text("Share").font(.caption)
                 }
                 .padding(.horizontal, 8).padding(.vertical, 4)
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray, lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary, lineWidth: 1))
             }.buttonStyle(.plain)
         } else {
             barButton("Copy", "doc.on.doc") {
@@ -783,7 +815,7 @@ public struct ZPlannerView: View {
                 Text(title).font(.caption)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary, lineWidth: 1))
         }.buttonStyle(.plain)
     }
 
@@ -818,7 +850,7 @@ public struct ZPlannerView: View {
                     }.buttonStyle(.plain)
                 } else {
                     Text("No residual gas — planning clean")
-                        .font(.caption).foregroundColor(.gray)
+                        .font(.caption).foregroundColor(.secondary)
                 }
                 if m.canCommit {
                     Button { m.commitDive() } label: {
@@ -883,14 +915,14 @@ public struct ZPlannerView: View {
                     Text(m.editingID == nil ? "Add >>" : "Update")
                         .padding(.horizontal, 14).padding(.vertical, 5)
                         .overlay(RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.black, lineWidth: 1))
+                            .stroke(Color.primary, lineWidth: 1))
                 }.buttonStyle(.plain)
                 if m.editingID != nil {
                     Button("Cancel") { m.cancelEdit() }.buttonStyle(.plain)
                 }
             }
             Divider()
-            Text("Tap a level to edit it.").font(.caption).foregroundColor(.gray)
+            Text("Tap a level to edit it.").font(.caption).foregroundColor(.secondary)
             ForEach($m.levels) { $l in
                 HStack(spacing: 6) {
                     check("", isOn: $l.enabled)
@@ -1016,7 +1048,7 @@ struct ConfigSheet: View {
                                       : "Conservatism: \(Int(m.conservatism)) %  (0–50 maximum)")
                             Slider(value: $m.conservatism, in: 0...50, step: 1)
                                 .frame(maxWidth: 360)
-                                .tint(.gray)
+                                .tint(.secondary)
                                 .disabled(gfOn)
                         }
                         .opacity(gfOn ? 0.4 : 1)
@@ -1088,8 +1120,8 @@ struct ConfigSheet: View {
                 .padding(16)
             }
         }
-        .background(Color.white)
-        .foregroundColor(.black)
+        .background(Color.planPaper)
+        .foregroundColor(.primary)
         #if os(macOS)
         .frame(width: 620, height: 720)
         #endif
@@ -1106,7 +1138,7 @@ struct ConfigSheet: View {
             content()
             Text(help)
                 .font(.caption)
-                .foregroundColor(.gray)
+                .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Divider()
         }
@@ -1134,7 +1166,7 @@ struct ConfigSheet: View {
         TextEditor(text: b)
             .font(.system(.body, design: .monospaced))
             .frame(maxWidth: 360, minHeight: height, maxHeight: height)
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.5)))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.5)))
     }
 }
 
@@ -1151,7 +1183,7 @@ struct LogSheet: View {
                     Text("No plans logged this session.\n"
                          + "Every successful Calculate is recorded here automatically.")
                         .multilineTextAlignment(.center)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.secondary)
                         .padding()
                 } else {
                     List {
@@ -1161,7 +1193,7 @@ struct LogSheet: View {
                                 // Which dive and settings produced this plan.
                                 Text(e.summary)
                                     .font(.caption2)
-                                    .foregroundColor(.gray)
+                                    .foregroundColor(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Text(e.text)
                                     .font(.system(.caption, design: .monospaced))
