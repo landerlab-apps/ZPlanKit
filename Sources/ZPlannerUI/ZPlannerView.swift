@@ -774,7 +774,11 @@ public struct ZPlannerView: View {
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                     Divider()
-                    Text(ZPlan.version)
+                    // Engine version AND the build this came from. The engine
+                    // number alone was ambiguous once builds went out to
+                    // testers: "I'm on 1.10.0" identifies the maths, not the
+                    // app, so a bug report could not be tied to a build.
+                    Text(buildStamp)
                         .font(.caption).foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -785,6 +789,14 @@ public struct ZPlannerView: View {
         .background(Color.planPaper)
     }
 
+
+    /// e.g. "1.1 (7) · engine 1.10.0" — what a tester should quote in a report.
+    private var buildStamp: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build)) · engine \(ZPlan.version)"
+    }
 
     @ViewBuilder private var shareButton: some View {
         if #available(iOS 16.0, macOS 13.0, *) {
