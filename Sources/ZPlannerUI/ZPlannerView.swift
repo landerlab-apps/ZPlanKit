@@ -102,7 +102,8 @@ public struct Manual {
     × to remove. Click a level's box to leave it out without deleting it.
 
     CLOSED CIRCUIT
-    Switch to Closed to show Set (setpoint) and Sld (Scamahorn slide).
+    Tap the OC chip so it reads CCR — on a tablet or Mac, switch Open to \
+    Closed. Set (setpoint) and Sld (Scamahorn slide) then appear beside the mix.
 
     DECO GASES
     Click Yes and list the mixes, e.g. 50, 100. The planner picks the richest \
