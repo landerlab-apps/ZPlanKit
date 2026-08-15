@@ -4,3 +4,7 @@
 *.o
 zplan
 # NB: Samples/plan.out is the reference regression output and IS tracked.
+
+# Stray CLI output. The tracked reference is Samples/plan.out.
+plan.out
+!Samples/plan.out
