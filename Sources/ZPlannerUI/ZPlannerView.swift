@@ -111,6 +111,12 @@ public struct Manual {
     happens. Config can also hold you there for a few extra minutes — see \
     Extended stops.
 
+    SETTINGS STRIP
+    On a phone the settings sit in one strip of chips above the tabs. It folds \
+    to a single summary line on the Plan tab so the schedule gets the full \
+    screen; the chevron opens or closes it by hand. altGF is a plain on/off \
+    there — its two numbers are set in Config.
+
     CONFIG
     Units, water, altitude, model, gradient factors, deep stops, ascent and \
     descent rates, RMVs. Each section carries its own explanation.
