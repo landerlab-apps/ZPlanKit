@@ -1,5 +1,5 @@
 //
-//  ZPlannerView.swift — v1.5.0
+//  ZPlannerView.swift — v1.6.0
 //
 //  Form-based planner front end. Monochrome, no graphics.
 //  Top bar: Config · Log · Calculate.
@@ -122,7 +122,8 @@ public struct Manual {
     descent rates, RMVs. Each section carries its own explanation.
 
     SURFACE INTERVAL AND RESIDUAL GAS
-    After a dive press "Dive done" to carry your inert gas loading forward. \
+    When you surface, press "Next dive" to carry your inert gas loading \
+    forward into the dive you plan next. \
     It is kept when the app is closed and ages with real time. While gas is \
     carried you must state a surface interval — 48 hr, 24 hr or Actual — \
     before Calculate will work.
@@ -294,7 +295,10 @@ final class PlannerModel: ObservableObject {
     @Published var baselineTissue: String? = nil
     @Published var baselineDate: Date? = nil
     /// Loading at the END of the most recent calculation, not yet committed.
-    private var resultTissue: String? = nil
+    ///
+    /// Published, because `canCommit` is derived from it and drives the button:
+    /// a plain property would not republish when commitDive consumed it.
+    @Published private var resultTissue: String? = nil
     private var autosave: AnyCancellable?
 
     init() {
@@ -598,6 +602,12 @@ final class PlannerModel: ObservableObject {
         baselineTissue = t
         baselineDate = Date()
         siActual = ""; si24 = false; si48 = false
+        // Consume it. Without this the button stayed live after committing, so
+        // it sat on screen next to "Residual gas is carried" as though nothing
+        // had happened — and pressing it again re-stamped the SAME dive with a
+        // fresh timestamp, silently resetting the surface interval to zero
+        // while the plan on screen was unchanged.
+        resultTissue = nil
         saveState()
     }
 
@@ -812,7 +822,7 @@ public struct ZPlannerView: View {
                 }
                 if m.canCommit {
                     Button { m.commitDive() } label: {
-                        Text("Dive done \u{2192} carry gas forward")
+                        Text("Next dive")
                             .font(.caption).underline()
                     }.buttonStyle(.plain)
                 }
