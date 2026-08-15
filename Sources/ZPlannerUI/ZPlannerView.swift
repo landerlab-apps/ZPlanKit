@@ -1,5 +1,5 @@
 //
-//  ZPlannerView.swift — v1.7.0
+//  ZPlannerView.swift — v1.8.0
 //
 //  Form-based planner front end. Monochrome, no graphics.
 //  Top bar: Config · Log · Calculate.
@@ -1053,9 +1053,21 @@ struct ConfigSheet: View {
                         }
                         .opacity(gfOn ? 0.4 : 1)
                     }
+                    // Stop grid stands on its own. It used to live inside Deep
+                    // stops, which hid it completely whenever gradient factors
+                    // were on — yet every schedule is built on this grid, GF or
+                    // not, Pyle or not, and a diver who wants 6 m increments on
+                    // a rebreather has nothing to do with deep stops.
+                    group("Stop depths",
+                          help: "Stop distance is the interval between decompression stops — 3 m is the convention, some rebreather divers prefer 6 m. Last stop is the depth of the final stop; some prefer pulling the 10 ft / 3 m stop deeper. Both apply to every schedule, whichever model, gradient factors or deep stops are in use.") {
+                        HStack(spacing: 16) {
+                            row2("Stop distance", $m.stopDistance)
+                            row2("Last stop", $m.lastStop)
+                        }
+                    }
                     if !(m.useGF && m.model != "vval") {
                         group("Deep stops",
-                              help: "Pyle deep stops insert short stops between the bottom and the first normal stop (mean-depth rule, re-run iteratively) to reduce microbubble formation and post-dive fatigue. Pyle stop time is the minutes spent at each generated stop (1–5). Stop distance is the interval between normal stops; Last stop is the depth of the final stop — some prefer pulling the 10 ft / 3 m stop deeper. Not shown when gradient factors are enabled: GF Low takes over the deep-stop role.") {
+                              help: "Pyle deep stops insert short stops between the bottom and the first normal stop (mean-depth rule, re-run iteratively) to reduce microbubble formation and post-dive fatigue. Pyle stop time is the minutes spent at each generated stop (1–5). Not shown when gradient factors are enabled: GF Low takes over the deep-stop role.") {
                             Picker("", selection: $m.deepStops) {
                                 Text("None").tag("n"); Text("Pyle").tag("p")
                             }.pickerStyle(.segmented).labelsHidden()
@@ -1063,10 +1075,6 @@ struct ConfigSheet: View {
                                 Stepper("Pyle stop time: \(m.pyleTime) min  (1–5)",
                                         value: $m.pyleTime, in: 1...5)
                                     .frame(maxWidth: 300)
-                            }
-                            HStack(spacing: 16) {
-                                row2("Stop distance", $m.stopDistance)
-                                row2("Last stop", $m.lastStop)
                             }
                         }
                     }
@@ -1083,7 +1091,7 @@ struct ConfigSheet: View {
                         editor($m.ascentRates, height: 76)
                     }
                     group("Deco Set Point (CCR) / Slide rate",
-                          help: "Setpoint changes by depth range during CCR deco, one per line, e.g. 80-30, 1.4 — a setpoint of 0 switches to open circuit for that range. Only active when the circuit is set to Closed on the main screen (disabled for open-circuit dives). Slide rate is the PO2 burned off per minute during a Scamahorn Slide: enter a bottom setpoint like 1.2-1.6 to ride the descent PO2 spike down to the setpoint for a deco advantage.") {
+                          help: "Setpoint changes by depth range during CCR deco, one per line, e.g. 80-30, 1.4 — a setpoint of 0 switches to open circuit for that range. Only active on closed circuit — the OC/CCR chip on a phone, the Open/Closed control elsewhere (disabled for open-circuit dives). Slide rate is the PO2 burned off per minute during a Scamahorn Slide: enter a bottom setpoint like 1.2-1.6 to ride the descent PO2 spike down to the setpoint for a deco advantage.") {
                         editor($m.decoSetpoints, height: 52)
                             .disabled(!m.circuitClosed)
                             .opacity(m.circuitClosed ? 1 : 0.4)

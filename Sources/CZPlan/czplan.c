@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.9.5"
+#define ZP_VERSION "1.10.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -1376,8 +1376,8 @@ int zp_report(const zp_config *cfg, const zp_result *res,
      *   \u2193 descent   \u2191 ascent   \u2014 stop   DStop deep stop
      * Short ascents between stops without a gas switch are folded into the
      * following stop's duration (owner spec, v1.4). */
-    APP("        depth   stop    run   gas         PO2   EAD\n");
-    APP(" --------------------------------------------------------\n");
+    APP("        depth   stop    run   gas       PO2   EAD\n");
+    APP(" ------------------------------------------------------\n");
     {
         double prev_end = 0, prev_depth = 0;
         double pfo2 = -1, pfhe = -1, psp = -1; int pcc = -1;
@@ -1395,8 +1395,15 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                  * ("CC 21/0 SP 1.50"), which is 15 characters in an 11-column
                  * field: it pushed PO2 and EAD out of alignment and wrapped the
                  * row. On closed circuit the diluent does not set the inspired
-                 * PO2 anyway, and its inert content is already visible in EAD. */
-                snprintf(gas, sizeof gas, "CC SP%.2f", L->setpoint);
+                 * PO2 anyway, and its inert content is already visible in EAD.
+                 *
+                 * The "CC " prefix has gone too. Every row of a closed-circuit
+                 * dive carried it, so it distinguished nothing, and "SP" says
+                 * closed circuit on its own — an open-circuit row has no
+                 * setpoint to print. Dropping it let the gas field shrink from
+                 * eleven columns to nine, which is the width of the widest
+                 * thing left in it ("TMX 21/25"). */
+                snprintf(gas, sizeof gas, "SP%.2f", L->setpoint);
             else if (L->fhe > 0.001)
                 snprintf(gas, sizeof gas, "TMX %.0f/%.0f", L->fo2*100, L->fhe*100);
             else if (fabs(L->fo2 - 0.21) < 0.005)
@@ -1413,7 +1420,7 @@ int zp_report(const zp_config *cfg, const zp_result *res,
             if (travel > 0.02 && !fold) {
                 int tm = (int)travel, ts2 = (int)((travel - tm) * 60 + 0.5);
                 if (ts2 == 60) { tm++; ts2 = 0; }
-                APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-11s\n",
+                APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-9s\n",
                     descending ? "\u2193    " : "\u2191    ",
                     L->depth_m * dscale, du, tm, ts2,
                     ceil(arrive - 1e-6),
@@ -1427,7 +1434,7 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                 /* GasSw, not Gas: the left column is an event column, and this
                  * row is an event. Five characters, matching DStop, so nothing
                  * else in the layout moves. */
-                APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-11s %4.2f %4.0f%-2s\n",
+                APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-9s %4.2f %4.0f%-2s\n",
                     "GasSw", L->depth_m * dscale, du, gm, gs,
                     ceil(L->runtime_min - 1e-6), gas,
                     L->ppo2, L->ead_m * dscale, du);
@@ -1439,7 +1446,7 @@ int zp_report(const zp_config *cfg, const zp_result *res,
             int mm = (int)disp, ss = (int)((disp - mm) * 60 + 0.5);
             if (ss == 60) { mm++; ss = 0; }
             if (L->stop_sec > 0.5 || L->kind == ZP_LINE_WAYPOINT)
-                APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-11s %4.2f %4.0f%-2s\n",
+                APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-9s %4.2f %4.0f%-2s\n",
                     L->kind == ZP_LINE_DEEPSTOP ? "DStop" : "\u2014    ",
                     L->depth_m * dscale, du, mm, ss,
                     ceil(L->runtime_min - 1e-6),
@@ -1455,7 +1462,7 @@ int zp_report(const zp_config *cfg, const zp_result *res,
             APP(" \u2191     %5.0f%-2s %3d:%02d %6.0f\n",
                 0.0, du, tm, ts2, ceil(res->runtime_min - 1e-6));
         }
-        APP(" --------------------------------------------------------\n");
+        APP(" ------------------------------------------------------\n");
     }
     if (res->decozone_start_m > 0)
         APP("Deco zone start: %.0f%s", res->decozone_start_m * dscale, du);
