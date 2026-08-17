@@ -186,3 +186,86 @@ The same defect explains the distribution. A rate that is also independent of
 depth cannot know that shallow stops are more productive than deep ones, so the
 schedule has no reason to shift time shallow — which is exactly what the two
 reference models do and this one does not.
+
+---
+
+# The fix — engine v1.11.0
+
+## What changed
+
+**1. The linear off-gassing rate is now the spec form.**
+
+    was:  dPt/dt = -k * PBOVP
+    now:  dPt/dt = -k * (P_amb + PBOVP - P_art)      clamped at 0
+
+applied to both nitrogen and helium.
+
+**2. PBOVP is 10.0 fsw for every compartment**, per spec section 9. The
+per-compartment fitted values (23, 17, 13, 11, 8...) existed only to compensate
+for the wrong rate law. With the rate corrected, the published uniform value
+reproduces the manned-trial anchor exactly and the fitted set no longer does.
+
+**3. VVAL now warns when helium is in the mix.** See below.
+
+Nothing else was touched. The arterial-tension and compartment-count
+divergences (sections 2 and 3 above) were implemented and measured: on air they
+change nothing, because the two arterial formulas coincide there. They are left
+alone rather than changed without evidence.
+
+## Acceptance
+
+| test | reference | before | after |
+|---|---|---|---|
+| 132 fsw / 20 min, 20 fsw stop | **9:00** (NEDU manned trial) | 9:00 | **9:00** |
+| Table 9-7 no-stop limits, 30–190 fsw | — | mean 0.65 min | mean 1.10 min |
+| 150 fsw / 20 min | 30 fsw 2:00, 20 fsw 15:00 | 3:00 / 20:00 | 3:00 / 20:00 |
+| ZHL16-C output | must not move | — | **byte-identical** |
+
+The no-stop drift is 2–3 minutes short at 130–190 fsw and every error except
+one is on the conservative side. The manned-trial anchor — the only
+schedule here validated on actual divers — is held exactly.
+
+## The reported dive, before and after
+
+70 m / 26 min on 18/45 with EAN50 and O2:
+
+| | before | after | MultiDeco VPM-B/E +2 |
+|---|---|---|---|
+| 24 m | 5:18 | 2:18 | 5:00 |
+| 21 m (switch to EAN50) | **14:00** | **1:00** | 3:00 |
+| 6 m | 10:00 | 15:00 | 18:00 |
+| 3 m | 20:18 | 25:18 | 25:00 |
+| total | 101 min | 69 min | 89 min |
+
+The pathology is gone: stop times now increase as the diver gets shallower, and
+the stop after the gas switch is shorter than the one before it rather than
+2.6x longer. The 3 m stop lands within 20 seconds of VPM-B.
+
+## Still open
+
+**The 20 fsw stop on 150 fsw / 20 min is 20 minutes against Table 9-9's 15, and
+the fix did not move it.** That stop sits in the *exponential* regime —
+supersaturation at 20 fsw barely reaches PBOVP — so the linear rate law has no
+effect on it. This is a second, independent defect and it has not been found.
+
+**Trimix is now 22% shorter than VPM-B/E +2, not 16% longer.** 69 minutes
+against 89. The direction of the error has reversed, which is the less
+forgiving direction.
+
+## Why VVAL now warns on helium
+
+There is no U.S. Navy EL-DCM helium table to validate against, and this is not a
+gap in our research:
+
+- The Surface-Supplied He-O2 table in the Diving Manual Rev 7 Change A is an
+  edited version of a **1939** table, not model-derived. NEDU states that its
+  longer and deeper schedules "will incur unacceptably high risks of DCS".
+- NEDU's replacement work used a *different* model — a probabilistic
+  linear-exponential multi-gas (LEM) fit to the N2He_2016 dataset — and
+  concluded by recommending the existing **MK 16 MOD 1 He-O2 table** instead.
+
+So the helium treatment in this engine — sqrt(28/4) half-time scaling, sharing
+the nitrogen MPTT and crossover — is an extrapolation with nothing to check it
+against, and it now produces schedules materially shorter than two independent
+references. The model says so on every trimix plan and points at ZHL16-C, which
+this folder shows reproduces VPM-B/E +2 to within three minutes.

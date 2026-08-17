@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.10.0"
+#define ZP_VERSION "1.11.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -88,12 +88,17 @@ static const double VVAL_HT_N2[VVAL_NC] = {
     1.5, 2.5, 3.5, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 160.0, 200.0, 240.0 };
 static const double VVAL_MPTT0_FSW[VVAL_NC] = {
     120.0, 115.0, 108.0, 99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5 };
-/* Crossover pressures FITTED against U.S. Navy references (2026-08-07):
- *   132 fsw / 20 min -> 9:00 @ 20 fsw  (NEDU manned-trial, algorithm-exact)
- *   40 fsw 170/200/240 min -> within 1 min of Rev.7 Table 9-9
+/* PBOVP, the crossover overpressure: 10.0 fsw for every compartment, per the
+ * VVAL-79 spec section 9.
+ *
+ * These were previously per-compartment fitted values (23, 17, 13, 11, 8...).
+ * That fit existed only to compensate for the wrong linear rate law above: with
+ * the rate fixed to the spec form, the published uniform 10 fsw reproduces the
+ * NEDU manned-trial anchor (132 fsw / 20 min -> 9:00 at 20 fsw) exactly, which
+ * the fitted set no longer does once the rate is correct.
  * Override for re-fitting with env ZP_PCROSS="v0,...,v11". */
 static double VVAL_PCROSS_FSW[VVAL_NC] = {
-    1e9, 1e9, 1e9, 1e9, 23.0, 17.0, 13.0, 11.0, 8.0, 8.0, 8.0, 8.0 };
+    10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0 };
 /* fitting hook: ZP_PCROSS="v0,v1,...,v11" overrides the table (temporary) */
 static void vval_pcross_env(void) {
     static int done = 0;
@@ -255,18 +260,41 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
             /* Thalmann EL-DCM: exponential uptake; during offgassing, a
              * compartment supersaturated beyond its crossover eliminates gas
              * at the constant rate k*Pcross (linear kinetics). */
+            /* Thalmann EL-DCM: exponential uptake; a compartment
+             * supersaturated beyond its crossover eliminates linearly.
+             *
+             * The linear rate is the SLOPE OF THE EXPONENTIAL CURVE AT THE
+             * CROSSOVER BOUNDARY, so the two regimes join smoothly
+             * (VVAL-79 spec section 6). The exponential slope where
+             * Pt = P_amb + PBOVP is
+             *
+             *     dPt/dt = -k * (P_amb + PBOVP - P_art)
+             *
+             * This used to be k * PBOVP, which is not the slope of anything
+             * and — fatally — depends on neither depth nor the gas being
+             * breathed. A washout rate that cannot vary with depth makes every
+             * 3 m of ceiling cost the same time, so stop times came out flat;
+             * one that cannot vary with gas means a switch to a rich deco mix
+             * could not accelerate elimination at all. On 70 m / 26 min with
+             * 18/45 and EAN50 the stop at 21 m ran 14:00 and the stop below it
+             * 5:18 — the schedule got LONGER after the gas switch, which no
+             * decompression model should do. It is now 1:00 against 5:18. */
             double kn2 = M_LN2 / VVAL_HT_N2[i];
             double supersat = (s->pn2[i] + s->phe[i]) - pa_now;
             double pcross = VVAL_PCROSS_FSW[i] * FSW2BAR;
             if (pin2 < s->pn2[i] && supersat > pcross) {
-                double p = s->pn2[i] - kn2 * pcross * dt;
+                double rate = kn2 * (pa_now + pcross - pin2);
+                if (rate < 0) rate = 0;
+                double p = s->pn2[i] - rate * dt;
                 s->pn2[i] = p > pin2 ? p : pin2;      /* never below inspired */
             } else {
                 s->pn2[i] += (pin2 - s->pn2[i]) * (1.0 - exp(-kn2 * dtn));
             }
             double khe = M_LN2 / (VVAL_HT_N2[i] / VVAL_HE_RATIO);
             if (pihe < s->phe[i] && supersat > pcross) {
-                double p = s->phe[i] - khe * pcross * dt;
+                double rate = khe * (pa_now + pcross - pihe);
+                if (rate < 0) rate = 0;
+                double p = s->phe[i] - rate * dt;
                 s->phe[i] = p > pihe ? p : pihe;
             } else {
                 s->phe[i] += (pihe - s->phe[i]) * (1.0 - exp(-khe * dth));
@@ -722,6 +750,30 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         s->phe[i] = cfg->have_initial_tissues ? cfg->init_phe[i] : 0.0;
     }
     s->cns = cfg->have_initial_tissues ? cfg->init_cns_pct : 0.0;
+
+    /* VVAL-79 is a NITROGEN model. There is no published Navy helium
+     * parameter set for it: the Surface-Supplied He-O2 table in the Diving
+     * Manual Rev 7 Change A is an edited 1939 table, not model-derived, and
+     * NEDU's replacement work (Twenty-First Century Surface-Supplied Heliox
+     * Decompression Table Development) uses a different probabilistic
+     * linear-exponential model and recommends the MK 16 MOD 1 table instead.
+     *
+     * The helium handling here — half-times scaled by sqrt(28/4), sharing the
+     * nitrogen MPTT and crossover — is this engine's own extrapolation and has
+     * no reference to be validated against. On 70 m / 26 min with 18/45 it
+     * produces about 22% less decompression than MultiDeco VPM-B/E +2 on the
+     * same dive. Say so, every time. */
+    if (cfg->use_vval) {
+        for (int w = 0; w < cfg->n_wp; w++)
+            if (cfg->wp[w].fhe > 0.001) {
+                warn(s, "VVAL-79 is a nitrogen model: the U.S. Navy publishes no "
+                        "helium parameters for it, and the helium handling here is "
+                        "an unvalidated extrapolation. Trimix schedules from this "
+                        "model are shorter than VPM-B and Buhlmann give. Use "
+                        "ZHL16-C with gradient factors for trimix.");
+                break;
+            }
+    }
     if (cfg->have_initial_tissues && cfg->surface_interval_min > 0) {
         double t = cfg->surface_interval_min;
         for (int i = 0; i < s->ncomp; i++) {
