@@ -2149,8 +2149,19 @@ int zp_report(const zp_config *cfg, const zp_result *res,
 
             bool descending = L->depth_m > prev_depth + 1e-9;
             /* fold short inter-stop ascents without a gas switch */
+            /* Short inter-stop ascents are normally folded into the stop
+             * that follows, which is the MultiDeco convention and matches how
+             * ZHL-16C and VVAL-18 have always been reported.
+             *
+             * VPM-B does not fold. Baker's engine already absorbs the travel
+             * leg by rounding the run time up on ARRIVAL, so folding it a
+             * second time in the report double-counts it: a whole-minute 1:00
+             * stop at 48 m came out as 1:49, and no amount of staring at the
+             * decompression code was going to explain it, because the code
+             * was right. Ascents get their own arrow instead. */
             bool fold = (!descending && travel > 0.02 && travel < 1.5 &&
-                         !gas_changed && L->kind != ZP_LINE_WAYPOINT);
+                         !gas_changed && L->kind != ZP_LINE_WAYPOINT
+                         && !IS_VPM(cfg));
             if (travel > 0.02 && !fold) {
                 int tm = (int)travel, ts2 = (int)((travel - tm) * 60 + 0.5);
                 if (ts2 == 60) { tm++; ts2 = 0; }
