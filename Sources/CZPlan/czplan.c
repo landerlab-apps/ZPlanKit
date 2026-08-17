@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.16.0"
+#define ZP_VERSION "1.17.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -585,7 +585,8 @@ static double gas_switch_depth(const sim *s, double to_m) {
         double d = (max_pa - s->p_surface) / s->bar_per_m;
         double grid = c->stop_distance_m > 0 ? c->stop_distance_m : 3.0;
         d = floor(d / grid + 1e-9) * grid;
-        double fnarc = (1.0 - fo2) + (c->oxy_narc ? fo2 : 0.0);
+        double fhe = c->oc_deco_fhe[i];
+        double fnarc = (1.0 - fo2 - fhe) + (c->oxy_narc ? fo2 : 0.0);
         double ref = c->oxy_narc ? 1.0 : 0.79;
         double p_end = (s->p_surface + d * s->bar_per_m) * fnarc / ref;
         if ((p_end - s->p_surface) / s->bar_per_m > c->max_end_m + 1e-6) continue;
@@ -752,7 +753,8 @@ static int best_deco_gas(const sim *s, double depth_m) {
         double max_pa = c->oc_deco_max_po2 / fo2 * P_SEALEVEL;      /* bar */
         double max_depth = (max_pa - s->p_surface) / s->bar_per_m;  /* metres */
         if (depth_m > max_depth + 0.2) continue;
-        double fnarc = (1.0 - fo2) + (c->oxy_narc ? fo2 : 0.0);
+        double fhe = c->oc_deco_fhe[i];
+        double fnarc = (1.0 - fo2 - fhe) + (c->oxy_narc ? fo2 : 0.0);
         double ref = c->oxy_narc ? 1.0 : 0.79;
         double p_end = pamb(s, depth_m) * fnarc / ref;
         double endd = (p_end - s->p_surface) / s->bar_per_m;
@@ -809,7 +811,7 @@ static void select_deco_source(sim *s, double depth) {
     if (g >= 0) {
         s->cc = false;
         s->fo2 = s->cfg->oc_deco_fo2[g];
-        s->fhe = 0.0;
+        s->fhe = s->cfg->oc_deco_fhe[g];
     }
     /* else: keep whatever we were breathing (bottom mix / setpoint) */
 
@@ -1524,7 +1526,18 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 char *tok = strtok(val, ",");
                 while (tok && cfg->n_oc_deco < ZP_MAX_GASES) {
                     trim(tok);
-                    if (*tok) cfg->oc_deco_fo2[cfg->n_oc_deco++] = atof(tok)/100.0;
+                    if (*tok) {
+                        /* "50" or "50/25". atof() alone silently swallowed the
+                         * helium: a diver who entered 50/25 got a schedule
+                         * computed for EAN50, on a gas they were not breathing. */
+                        double o2 = atof(tok), he = 0.0;
+                        char *slash = strchr(tok, '/');
+                        if (slash) he = atof(slash + 1);
+                        if (o2 + he > 100.0 + 1e-9) { he = 0.0; }
+                        cfg->oc_deco_fo2[cfg->n_oc_deco] = o2/100.0;
+                        cfg->oc_deco_fhe[cfg->n_oc_deco] = he/100.0;
+                        cfg->n_oc_deco++;
+                    }
                     tok = strtok(NULL, ",");
                 }
             }

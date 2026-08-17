@@ -83,6 +83,12 @@ typedef struct {
     double deco_rmv_l_min;
     bool   use_oc_deco;
     double oc_deco_fo2[ZP_MAX_GASES];
+    /* Helium fraction of each deco gas. Trimix and heliox deco mixes are a real
+     * technique: switching from a trimix bottom gas to EAN50 maximises the
+     * helium gradient but leaves inspired nitrogen almost unchanged, so
+     * nitrogen washout very nearly stops. A 50/25 or 50/50 deco mix drives
+     * inspired nitrogen to near zero instead. */
+    double oc_deco_fhe[ZP_MAX_GASES];
     /* ICD advisory threshold, ata rise in an inspired inert partial
      * pressure at a gas switch. 0 disables. V-Planner uses 0.5. */
     double icd_warn_bar;
