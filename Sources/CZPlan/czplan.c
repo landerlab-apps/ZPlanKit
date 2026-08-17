@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.14.0"
+#define ZP_VERSION "1.15.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -112,6 +112,20 @@ static const double VVAL_MPTT0_FSW[VVAL_NC] = {
  * Overridable for fitting with ZP_MPTT_HE="v0,...,v11". */
 static double VVAL_MPTT0_HE_FSW[VVAL_NC] = {
     120.0, 115.0, 108.0, 99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5 };
+/* MPTT projection slope, per gas. Spec section 7 defines MPTT(D) = MPTT0 + a*D
+ * and VVal-79 sets a = 1.0 throughout, which tolerates the same supersaturation
+ * gradient at 54 m as at 3 m - the reason the model has no deep stops.
+ *
+ * a < 1 shrinks the tolerated gradient with depth. At D = 0 the term vanishes,
+ * so the surfacing ceiling is untouched: deep stops that cost nothing shallow.
+ * Nitrogen stays at 1.0 so air is unchanged. Override with ZP_SLOPE_HE. */
+static double VVAL_SLOPE_N2 = 1.0;
+static double VVAL_SLOPE_HE = 1.0;
+static void vval_slope_env(void) {
+    static int done = 0; if (done) return; done = 1;
+    const char *e = getenv("ZP_SLOPE_HE"); if (e) VVAL_SLOPE_HE = atof(e);
+}
+
 static void vval_mptt_he_env(void) {
     static int done = 0; if (done) return; done = 1;
     const char *e = getenv("ZP_MPTT_HE"); if (!e) return;
@@ -478,7 +492,12 @@ static double ceiling_bar(const sim *s) {
              * Buhlmann uses for a and b. With phe = 0 this is exactly the
              * nitrogen value, so every air schedule is untouched. */
             double m = (s->pn2[i] * VVAL_MPTT0_FSW[i] + s->phe[i] * VVAL_MPTT0_HE_FSW[i]) / pt;
-            double tol = s->p_surface + (pt - m * FSW2BAR);
+            /* Mix-weighted projection slope. D_ceil = (tension - MPTT0)/a, so
+             * the tolerated ambient is p_surface + (pt - MPTT0)/a. At
+             * pt = MPTT0 this is p_surface whatever a is — surfacing unchanged. */
+            double a = (s->pn2[i] * VVAL_SLOPE_N2 + s->phe[i] * VVAL_SLOPE_HE) / pt;
+            if (a < 0.05) a = 0.05;
+            double tol = s->p_surface + (pt - m * FSW2BAR) / a;
             if (tol > worst) worst = tol;
         }
         return worst;
@@ -871,6 +890,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     s->n2a = N2_A_C;            /* v1.5: ZHL-16C only */
     vval_pcross_env();
     vval_mptt_he_env();
+    vval_slope_env();
     s->ncomp = cfg->use_vval ? VVAL_NC
              : (cfg->use_1b ? ZP_COMPARTMENTS : ZP_COMPARTMENTS - 1);
 
@@ -1496,6 +1516,16 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                         (*cnt)++;
                     }
                 }
+            }
+            else if (!strcmp(key, "heslope")) {
+                double v = atof(val);
+                if (v >= 0.2 && v <= 1.5) VVAL_SLOPE_HE = v;
+            }
+            else if (!strcmp(key, "hemptt")) {
+                double v = atof(val);
+                if (v >= 0.5 && v <= 2.5)
+                    for (int i = 0; i < VVAL_NC; i++)
+                        VVAL_MPTT0_HE_FSW[i] = VVAL_MPTT0_FSW[i] * v;
             }
             else if (!strcmp(key, "usedecosetpoint")) cfg->use_deco_setpoint = truthy(val);
             else if (!strcmp(key, "decosetpoint")) {
