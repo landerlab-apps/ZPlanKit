@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.13.0"
+#define ZP_VERSION "1.14.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -103,6 +103,22 @@ static const double VVAL_HT_N2[VVAL_NC] = {
     1.5, 2.5, 3.5, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 160.0, 200.0, 240.0 };
 static const double VVAL_MPTT0_FSW[VVAL_NC] = {
     120.0, 115.0, 108.0, 99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5 };
+/* Helium MPTT0, per compartment. Cochran's twenty-compartment trimix model
+ * "included fast compartments to compensate for helium gas" (owner's InDepth
+ * article). The mechanism: give the fast compartments a helium ceiling low
+ * enough to bite early in the ascent, so a helium-loaded diver is held deep.
+ * Air is untouched by construction - with no helium in a compartment the
+ * mix-weighted MPTT0 reduces exactly to the nitrogen value.
+ * Overridable for fitting with ZP_MPTT_HE="v0,...,v11". */
+static double VVAL_MPTT0_HE_FSW[VVAL_NC] = {
+    120.0, 115.0, 108.0, 99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5 };
+static void vval_mptt_he_env(void) {
+    static int done = 0; if (done) return; done = 1;
+    const char *e = getenv("ZP_MPTT_HE"); if (!e) return;
+    char buf[256]; strncpy(buf, e, 255); buf[255] = 0;
+    char *tok = strtok(buf, ","); int i = 0;
+    while (tok && i < VVAL_NC) { VVAL_MPTT0_HE_FSW[i++] = atof(tok); tok = strtok(NULL, ","); }
+}
 /* PBOVP, the crossover overpressure: 10.0 fsw for every compartment, per the
  * VVAL-79 spec section 9.
  *
@@ -457,7 +473,12 @@ static double ceiling_bar(const sim *s) {
          * therefore surface pressure plus the excess tension over MPTT0. */
         for (int i = 0; i < VVAL_NC; i++) {
             double pt = s->pn2[i] + s->phe[i];
-            double tol = s->p_surface + (pt - VVAL_MPTT0_FSW[i] * FSW2BAR);
+            if (pt <= 0) continue;
+            /* Mix-weighted maximum permissible tension, the same weighting
+             * Buhlmann uses for a and b. With phe = 0 this is exactly the
+             * nitrogen value, so every air schedule is untouched. */
+            double m = (s->pn2[i] * VVAL_MPTT0_FSW[i] + s->phe[i] * VVAL_MPTT0_HE_FSW[i]) / pt;
+            double tol = s->p_surface + (pt - m * FSW2BAR);
             if (tol > worst) worst = tol;
         }
         return worst;
@@ -849,6 +870,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     s->bar_per_m = (cfg->salt_water ? RHO_SALT : RHO_FRESH) * G_ACC / 1e5;
     s->n2a = N2_A_C;            /* v1.5: ZHL-16C only */
     vval_pcross_env();
+    vval_mptt_he_env();
     s->ncomp = cfg->use_vval ? VVAL_NC
              : (cfg->use_1b ? ZP_COMPARTMENTS : ZP_COMPARTMENTS - 1);
 

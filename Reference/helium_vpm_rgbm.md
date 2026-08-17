@@ -191,3 +191,81 @@ That is a complete architectural specification for the trimix variant:
    This is the term that produces a deep first stop, and its absence is why
    VVAL-79 does not stop until 33 m where VPM-B stops at 54 m.
 4. Compartment range 5 to 480 min — our slowest is 240.
+
+---
+
+# Fast compartments for helium — built, fitted, and it does not work
+
+Engine 1.14.0. The mechanism from the owner's InDepth article — *"fast
+compartments to compensate for helium gas"* — implemented as a **separate
+helium MPTT0 per compartment**, with the ceiling mix-weighted the way Buhlmann
+weights a and b:
+
+    MPTT0_eff(i) = ( pn2·MPTT0_N2(i) + phe·MPTT0_He(i) ) / (pn2 + phe)
+
+With no helium in a compartment this is exactly the nitrogen value, so **air is
+untouched by construction** — confirmed at every setting tested below.
+
+## Attempt 1: lower the ceiling on the three fast compartments
+
+No effect whatsoever. First stop stayed at 33 m from 120 fsw down to 41 fsw.
+
+The reason is in the half-times. Our fast compartments are 1.5, 2.5 and 3.5 min
+on nitrogen, which under `sqrt(28/4)` scaling are **0.57, 0.94 and 1.32 min on
+helium**. They equilibrate within about three minutes, so during a 10 m/min
+ascent they track ambient almost exactly and never accumulate enough
+supersaturation to control anything. A sub-minute compartment cannot hold a
+diver deep because it has nothing left to hold.
+
+Cochran's Gemini is described as carrying compartments *"between five and 480
+minutes"*. The relevant "fast" compartments are the five-minute ones, not
+sub-minute ones.
+
+## Attempt 2: scale the helium ceiling across all compartments
+
+| He MPTT0 scale | first stop | total deco | deeper than 12 m | air anchors |
+|---:|---:|---:|---:|---|
+| **VPM-B target** | **54 m** | **92 min** | **38%** | — |
+| 1.00 (neutral) | 33 m | 117 | 17% | 9.0 / 3+19 |
+| 0.90 | 36 m | 133 | 19% | 9.0 / 3+19 |
+| 0.80 | 39 m | 149 | 21% | 9.0 / 3+19 |
+| 0.70 | 42 m | 170 | 22% | 9.0 / 3+19 |
+| 0.60 | 42 m | 187 | 23% | 9.0 / 3+19 |
+| 0.55 | 45 m | 197 | 24% | 9.0 / 3+19 |
+| 0.50 | 45 m | 208 | 24% | 9.0 / 3+19 |
+
+The air anchors never move — the mix-weighting works exactly as intended.
+
+**But the trade is ruinous.** Buying twelve metres of first stop, 33 to 45,
+costs ninety-one minutes: 117 to 208. VPM-B reaches 54 m in **92 minutes
+total**, less than the neutral setting. No value of the scale gets anywhere
+near it.
+
+## Why, and what it means
+
+In a fixed-ceiling model, lowering the ceiling lengthens **every** stop, not
+just the deep ones. The ceiling that forces a stop at 45 m is still in force at
+6 m and 3 m, where it is enormously expensive.
+
+VPM's deep stops are cheap because its constraint **evolves during the ascent**:
+the allowable gradient starts small, and grows as bubbles are compressed and the
+critical volume is spent. Gradient factors emulate this crudely by interpolating
+GF Low to GF High with depth — which is exactly why ZHL16-C at GF 30/85 reaches
+48 m in 116 minutes where VVAL needs 208 to reach 45.
+
+**So a helium-specific M-value is the wrong shape of fix.** It is not that the
+parameter is unfitted; the mechanism cannot produce the behaviour. The article
+says as much in passing — the Cochran model *"included more than the fast
+compartment and ascent velocity to compensate for the aforementioned microbubble
+formations."* More than. There is a bubble term.
+
+What VVAL needs to behave on helium is a **depth-varying ceiling**: either a
+gradient-factor-style interpolation applied to MPTT, or a genuine bubble term.
+That is the next experiment, and it is a bigger change than a parameter.
+
+## What shipped
+
+The mix-weighted MPTT0 machinery, set **neutral** (helium MPTT0 = nitrogen
+MPTT0), so no schedule changes. `ZP_MPTT_HE="v0,...,v11"` overrides it for
+further fitting. The infrastructure is right even though this parameterisation
+is not, and any future helium work needs exactly this weighting.
