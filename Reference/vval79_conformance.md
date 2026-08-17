@@ -1,4 +1,4 @@
-# VVal-79 conformance review — czplan.c v1.10.0
+# VVal-79 conformance review — czplan.c v1.10.0 (superseded by v1.12.0; see thalmann_source_findings.md)
 
 Prompted by a 70 m / 30 min 18/45 dive with EAN50 and O2, whose stops came out
 21 m 13:00, 18 m 12:20, 15 m 11:20, 12 m 10:20 — flat, and *decreasing* with

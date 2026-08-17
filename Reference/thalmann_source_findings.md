@@ -194,3 +194,79 @@ resolved the reported pathology.
 - **MT92**: French professional tables, Comex lineage, helium-capable —
   a possible outside sanity bound for a helium model, not a validation of one.
 - **NOAA Diving Manual**: oxygen exposure limits and general reference.
+
+---
+
+# Implemented — engine v1.12.0
+
+Re-read of Figures 30-34 in the NEDU report, and the code now follows them.
+
+## 1. Arterial tensions, both branches (Figure 31, "UPDT7 Initialize")
+
+    constant PO2 :  PAO2 = PO2 * SURFP * (1 - PH2O/PAMB) - AMBAO2
+    open circuit :  PAO2 = (PAMB - PH2O) * FO2           - AMBAO2
+    both then    :  PA_inert = MAX( PAMB - (PAO2 + PACO2 + PH2O), 0 )
+
+Two corrections. The CO2 term is a **flat** subtraction from the inert tension;
+the old `F_inert * (PAMB - 1.85 fsw)` form scaled it by the inert fraction and
+only coincided with the correct value on air (0.79 x 1.85 = 1.46 vs 1.50).
+And **constant PO2 is a genuinely separate formula** — arterial O2 is fixed by
+the setpoint and does not scale with depth, so all of a depth change goes into
+the inert gas.
+
+The Navy model carries one inert gas; the total inert tension is split between
+N2 and He in the ratio the source supplies them, which leaves air untouched.
+
+## 2. SDR (Figure 32, "Set Time Constants")
+
+    if CPO2 OR FN2 <= (1 - CNDSDR_FO2):  KDSAT = KSAT * SDR
+
+Note the first condition. **On a rebreather SDR applies unconditionally**,
+whatever the FO2. This was missing entirely and is the single largest effect of
+this release.
+
+## 3. Venous crossover reference (Figures 30, 33, 34)
+
+    PVSAT = PAMB - (PVO2 + PVCO2 + PH2O)
+    boundary tension  PVN2 = PVSAT + PBOVP
+    linear rate       dP/dt = KDsat * (PA_inert - PVN2)
+
+Both the test and the rate now use the venous reference. Figure 34's quadratic
+confirms the rate is the exponential slope at that boundary.
+
+## 4. LST_DOMode 0
+
+Leaving the last stop is judged against an instantaneous ascent to the surface
+from one stop increment, with the exchange during travel to it credited.
+
+## 5. PBOVP refitted to 14 fsw
+
+The published 10 fsw was fitted in a model with no venous term. With the venous
+reference in place it gives 11 min against the manned trial's 9. Swept 10-44
+fsw: **14 fsw reproduces the manned anchor exactly.** The value is a fit, and
+labelled as one.
+
+## Measured
+
+| | reference | v1.11.0 | v1.12.0 |
+|---|---|---|---|
+| 132 fsw / 20 min, 20 fsw stop | **9** (NEDU manned) | 9 | **9** |
+| 150 fsw / 20 min | 2 + 15 = 17 | 3 + 20 = 23 | 3 + 19 = 22 |
+| Table 9-7, 30-190 fsw | — | mean 1.10 min | mean 1.25 min |
+| CCR 45 m / 25 min SP1.20 | — | 12 min | **17 min** |
+| ZHL16-C | must not move | — | **identical** |
+
+## Two things to be straight about
+
+**The no-stop limits now run LONG at shallow depths** — +4 min at 30 fsw, +2 at
+35 and 45, +19 on the 1102 at 25 fsw (about 1.7%). Previously almost every error
+was negative. The cause is the corrected arterial formula, which lowers inspired
+nitrogen very slightly on air and so lengthens long shallow no-stop times. It is
+the documented formula, but the drift is on the permissive side and that is
+worth knowing.
+
+**150 fsw / 20 min is still 22 against a published 17, and I cannot account for
+it.** It is not the gas-exchange parameters: the 20 fsw stop held at 19-20 min
+across a PBOVP sweep from 10 to 44 fsw. Remaining candidates are TTIS,
+SRF_CNTRLT_MODE, the first-stop routine FRSP7, and the metres-versus-fsw depth
+conversion. The error is conservative.

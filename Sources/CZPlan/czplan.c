@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.11.0"
+#define ZP_VERSION "1.12.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -83,7 +83,16 @@ static const double HE_B[ZP_COMPARTMENTS] = {   /* standard ZH-L16 order; the op
  * ------------------------------------------------------------------ */
 #define VVAL_NC 12
 #define FSW2BAR (1.01325 / 33.0)
-#define VVAL_H2O_BAR (1.85 * FSW2BAR)      /* 47 mmHg alveolar water vapour */
+/* VVal-79 gas-exchange constants, NEDU EL-DCA (Thalmann table-generation
+ * report, Figures 30-34). All in fsw, converted here. */
+#define VVAL_PH2O_BAR   (0.00 * FSW2BAR)   /* tissue water vapour            */
+#define VVAL_PACO2_BAR  (1.50 * FSW2BAR)   /* arterial CO2                   */
+#define VVAL_PVCO2_BAR  (2.30 * FSW2BAR)   /* venous CO2                     */
+#define VVAL_PVO2_BAR   (2.00 * FSW2BAR)   /* venous O2                      */
+#define VVAL_AMBAO2_BAR (0.00 * FSW2BAR)   /* ambient-arterial O2 gradient   */
+#define VVAL_SDR         0.70              /* saturation/desaturation ratio  */
+#define VVAL_CNDSDR_FO2  0.80              /* SDR activation FO2 threshold   */
+#define VVAL_H2O_BAR (1.85 * FSW2BAR)      /* superseded; kept for tissue.dat */
 static const double VVAL_HT_N2[VVAL_NC] = {
     1.5, 2.5, 3.5, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 160.0, 200.0, 240.0 };
 static const double VVAL_MPTT0_FSW[VVAL_NC] = {
@@ -98,7 +107,7 @@ static const double VVAL_MPTT0_FSW[VVAL_NC] = {
  * the fitted set no longer does once the rate is correct.
  * Override for re-fitting with env ZP_PCROSS="v0,...,v11". */
 static double VVAL_PCROSS_FSW[VVAL_NC] = {
-    10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0 };
+    14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0 };
 /* fitting hook: ZP_PCROSS="v0,v1,...,v11" overrides the table (temporary) */
 static void vval_pcross_env(void) {
     static int done = 0;
@@ -221,9 +230,49 @@ static double alveolar(double p_ambient) {
 static void inspired(const sim *s, double depth_m,
                      double *pin2, double *pihe, double *pio2) {
     double pa = alveolar(pamb(s, depth_m));
-    if (s->cfg->use_vval) {                    /* USN convention: 1.85 fsw */
-        pa = pamb(s, depth_m) - VVAL_H2O_BAR;
-        if (pa < 0) pa = 0;
+    if (s->cfg->use_vval) {
+        /* NEDU EL-DCA "UPDT7 Initialize" (Figure 31), both branches:
+         *
+         *   constant PO2 : PAO2 = PO2 * SURFP * (1 - PH2O/PAMB) - AMBAO2
+         *   open circuit : PAO2 = (PAMB - PH2O) * FO2          - AMBAO2
+         *   both then    : PA_inert = MAX(PAMB - (PAO2 + PACO2 + PH2O), 0)
+         *
+         * Two things this gets right that the old code did not. The CO2
+         * correction is a FLAT subtraction from the inert tension, not
+         * something scaled by the inert fraction — the old
+         * "PAMB - 1.85 fsw, then multiply by F_inert" form only coincided
+         * with this on air, because 0.79 x 1.85 = 1.46 = 1.50. And constant
+         * PO2 is a genuinely separate formula: the arterial O2 is fixed by
+         * the setpoint and does NOT scale with depth, so every bit of a depth
+         * change goes into the inert gas.
+         *
+         * The Navy model carries one inert gas. The total inert tension is
+         * split between N2 and He in the ratio the breathing source supplies
+         * them, which is the only generalisation that leaves air unchanged. */
+        double amb = pamb(s, depth_m);
+        double pao2;
+        if (s->cc) {
+            double sp = s->setpoint;
+            if (s->slide_peak > 0) {
+                double rate = s->cfg->slide_rate > 0 ? s->cfg->slide_rate : 0.1;
+                double e = s->slide_peak - rate * (s->runtime - s->slide_t0);
+                if (e > sp) sp = e;
+            }
+            pao2 = sp * P_SEALEVEL * (1.0 - VVAL_PH2O_BAR / amb) - VVAL_AMBAO2_BAR;
+            if (pao2 > amb) pao2 = amb;
+        } else {
+            pao2 = (amb - VVAL_PH2O_BAR) * s->fo2 - VVAL_AMBAO2_BAR;
+        }
+        if (pao2 < 0) pao2 = 0;
+        double pinert = amb - (pao2 + VVAL_PACO2_BAR + VVAL_PH2O_BAR);
+        if (pinert < 0) pinert = 0;
+        double fin = s->cc ? (1.0 - s->fo2) : (1.0 - s->fo2);
+        double fhe_share = fin > 1e-9 ? s->fhe / fin : 0.0;
+        if (fhe_share > 1.0) fhe_share = 1.0;
+        *pihe = pinert * fhe_share;
+        *pin2 = pinert * (1.0 - fhe_share);
+        *pio2 = pao2;
+        return;
     }
     if (s->cc) {
         double po2 = s->setpoint;
@@ -279,25 +328,46 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
              * 18/45 and EAN50 the stop at 21 m ran 14:00 and the stop below it
              * 5:18 — the schedule got LONGER after the gas switch, which no
              * decompression model should do. It is now 1:00 against 5:18. */
-            double kn2 = M_LN2 / VVAL_HT_N2[i];
-            double supersat = (s->pn2[i] + s->phe[i]) - pa_now;
+            /* "Set Time Constants" (Figure 32): the desaturation constant is
+             * scaled by SDR when running constant PO2, OR when FN2 is at or
+             * below (1 - CNDSDR_FO2). Note the first condition: on a
+             * rebreather SDR applies unconditionally, whatever the FO2. */
+            bool sdr_on = s->cc || (1.0 - s->fo2 - s->fhe) <= (1.0 - VVAL_CNDSDR_FO2);
+            double sdr = sdr_on ? VVAL_SDR : 1.0;
+
+            /* "UPDT7" (Figure 30) and the crossover routines (33, 34): the
+             * linear/exponential boundary is the VENOUS saturation reference
+             * plus the gas-phase overpressure, not ambient plus it.
+             *     PVSAT = PAMB - (PVO2 + PVCO2 + PH2O)
+             *     boundary tension PVN2 = PVSAT + PBOVP
+             * and the linear rate is the exponential slope there,
+             *     dP/dt = KDsat * (PA_inert - PVN2). */
+            double pvsat = pa_now - (VVAL_PVO2_BAR + VVAL_PVCO2_BAR + VVAL_PH2O_BAR);
             double pcross = VVAL_PCROSS_FSW[i] * FSW2BAR;
+            double pvn2 = pvsat + pcross;
+            double supersat = (s->pn2[i] + s->phe[i]) - pvsat;
+
+            double kn2 = M_LN2 / VVAL_HT_N2[i];
+            double kdn2 = kn2 * sdr;
             if (pin2 < s->pn2[i] && supersat > pcross) {
-                double rate = kn2 * (pa_now + pcross - pin2);
+                double rate = kdn2 * (pvn2 - pin2);
                 if (rate < 0) rate = 0;
                 double p = s->pn2[i] - rate * dt;
                 s->pn2[i] = p > pin2 ? p : pin2;      /* never below inspired */
             } else {
-                s->pn2[i] += (pin2 - s->pn2[i]) * (1.0 - exp(-kn2 * dtn));
+                double k = (pin2 < s->pn2[i]) ? kdn2 : kn2;
+                s->pn2[i] += (pin2 - s->pn2[i]) * (1.0 - exp(-k * dtn));
             }
             double khe = M_LN2 / (VVAL_HT_N2[i] / VVAL_HE_RATIO);
+            double kdhe = khe * sdr;
             if (pihe < s->phe[i] && supersat > pcross) {
-                double rate = khe * (pa_now + pcross - pihe);
+                double rate = kdhe * (pvn2 - pihe);
                 if (rate < 0) rate = 0;
                 double p = s->phe[i] - rate * dt;
                 s->phe[i] = p > pihe ? p : pihe;
             } else {
-                s->phe[i] += (pihe - s->phe[i]) * (1.0 - exp(-khe * dth));
+                double k = (pihe < s->phe[i]) ? kdhe : khe;
+                s->phe[i] += (pihe - s->phe[i]) * (1.0 - exp(-k * dth));
             }
         } else {
             s->pn2[i] += (pin2 - s->pn2[i]) * (1.0 - exp(-M_LN2 * dtn / N2_HT[i]));
@@ -682,6 +752,24 @@ static void select_deco_source(sim *s, double depth) {
  * rates, with off-gassing credited along the way — never takes the diver
  * shallower than the instantaneous ceiling. With slow shallow ascent rates,
  * stops shorten or vanish, exactly as the original advertises. */
+/* LST_DOMode 0: leaving the LAST stop is judged by allowing an instantaneous
+ * ascent to the surface from one stop increment, travelling the diver up to
+ * that depth first so the exchange during that travel counts. Requiring the
+ * ceiling to reach zero while still at the last stop is LST_DOMode 1, the most
+ * conservative of the three treatments the NEDU report defines. */
+static bool can_surface_from_increment(const sim *s, double inc_m) {
+    sim c = *s;
+    while (c.depth - inc_m > 1e-9) {
+        double rate = rate_for(c.cfg->ascent, c.cfg->n_ascent, c.depth, 10.0);
+        double step = rate * DT;
+        if (step > c.depth - inc_m) step = c.depth - inc_m;
+        double mid = c.depth - step / 2.0;
+        tick(&c, mid, step / rate, false);
+        c.depth -= step;
+    }
+    return (ceiling_bar(&c) - c.p_surface) / c.bar_per_m <= 1e-6;
+}
+
 static bool can_leave(const sim *s, double to_m) {
     /* Standard criterion (MultiDeco / Subsurface / TechDeco): the diver may
      * ascend only when the INSTANTANEOUS ceiling is already shallower than
@@ -1004,9 +1092,12 @@ static int run_plan(const zp_config *cfg, zp_result *out,
 
         double arrive_rt = s->runtime;   /* for whole-minute rounding below */
         double stop_time = 0;
-        double gg = (here <= last_stop + 1e-9) ? 0
+        bool at_last = (here <= last_stop + 1e-9);
+        double gg = at_last ? 0
                   : (here - stop_iv < last_stop ? last_stop : here - stop_iv);
-        while ((!can_leave(s, gg) || stop_time < min_time - 1e-9)
+        bool lst_do0 = at_last && cfg->use_vval;
+        while (((lst_do0 ? !can_surface_from_increment(s, stop_iv)
+                         : !can_leave(s, gg)) || stop_time < min_time - 1e-9)
                && stop_time < 24.0*60.0) {
             double t = quantum;
             while (t > 1e-9) { double dt = t<DT?t:DT; tick(s,s->depth,dt,false); t-=dt; }
