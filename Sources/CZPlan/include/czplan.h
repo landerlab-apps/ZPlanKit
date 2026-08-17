@@ -83,6 +83,9 @@ typedef struct {
     double deco_rmv_l_min;
     bool   use_oc_deco;
     double oc_deco_fo2[ZP_MAX_GASES];
+    /* ICD advisory threshold, ata rise in an inspired inert partial
+     * pressure at a gas switch. 0 disables. V-Planner uses 0.5. */
+    double icd_warn_bar;
     int    n_oc_deco;
     double oc_deco_max_po2;
     double max_end_m;

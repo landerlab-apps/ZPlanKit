@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.15.0"
+#define ZP_VERSION "1.16.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -798,6 +798,10 @@ static double deco_setpoint_for(const zp_config *c, double depth) {
  * gas within Max PO2 and Max END is taken if one qualifies; failing all of
  * that, keep breathing whatever we already were. */
 static void select_deco_source(sim *s, double depth) {
+    /* Every gas change funnels through here - do_gas_switch is only one of four
+     * callers - so the isobaric counterdiffusion advisory belongs here too. */
+    double icd_fo2 = s->fo2, icd_fhe = s->fhe; bool icd_cc = s->cc;
+
     double sp = deco_setpoint_for(s->cfg, depth);
     if (sp > 0) { s->cc = true; s->setpoint = sp; return; }
     if (sp == 0) s->cc = false; /* explicit OC range */
@@ -808,6 +812,38 @@ static void select_deco_source(sim *s, double depth) {
         s->fhe = 0.0;
     }
     /* else: keep whatever we were breathing (bottom mix / setpoint) */
+
+    /* Isobaric counterdiffusion advisory, V-Planner's criterion: flag when the
+     * RISE in an inspired inert partial pressure at the switch exceeds a
+     * threshold, default 0.5 ata.
+     *
+     * Deliberately NOT the "rule of fifths". That rule works in gas FRACTIONS
+     * weighted by solubility, i.e. in absolute quantities of gas, where every
+     * other thing this engine does is partial pressures - which is what sets
+     * the diffusion gradient. It also forbids 18/45 to EAN50, a switch that is
+     * standard practice; on this criterion that switch is quiet at 21 m
+     * (+0.41 ata) and correctly flags at 30 m (+0.53). The rule of fifths has
+     * had no empirical evaluation; the partial-pressure form is what V-Planner
+     * ships and it discriminates where it should.
+     *
+     * Advisory only. It never changes the schedule. */
+    if (s->cfg->icd_warn_bar > 0 && !icd_cc && !s->cc &&
+        (fabs(s->fo2 - icd_fo2) > 1e-6 || fabs(s->fhe - icd_fhe) > 1e-6)) {
+        double pa = pamb(s, depth);
+        double dn2 = ((1.0 - s->fo2 - s->fhe) - (1.0 - icd_fo2 - icd_fhe)) * pa;
+        double dhe = (s->fhe - icd_fhe) * pa;
+        double rise = dn2 > dhe ? dn2 : dhe;
+        if (rise > s->cfg->icd_warn_bar) {
+            char m[240];
+            snprintf(m, sizeof m,
+                "Isobaric counterdiffusion: at the %.0f m switch the inspired %s "
+                "rises %.2f ata, above the %.2f limit. Consider switching "
+                "shallower, or to a mix that still carries helium.",
+                depth / (s->cfg->metric_output ? 1.0 : 0.3048),
+                dn2 > dhe ? "nitrogen" : "helium", rise, s->cfg->icd_warn_bar);
+            warn(s, m);
+        }
+    }
 }
 
 
@@ -1516,6 +1552,10 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                         (*cnt)++;
                     }
                 }
+            }
+            else if (!strcmp(key, "icdwarn")) {
+                double v = atof(val);
+                cfg->icd_warn_bar = (v >= 0 && v <= 3.0) ? v : 0.0;
             }
             else if (!strcmp(key, "heslope")) {
                 double v = atof(val);
