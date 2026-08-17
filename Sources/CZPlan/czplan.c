@@ -1366,6 +1366,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
 
     double leg_start = s->runtime;
     double vpm_prev_rt = -1.0;      /* run time ending the previous VPM stop */
+    double vpm_first_stop = -1.0;   /* VPM-B first stop, set once (see below) */
     while (s->depth > 1e-9) {
         /* mandated deep stop below us? honour it first */
         double next_deep = (deep_idx < n_deep) ? deep[deep_idx].depth : -1;
@@ -1421,8 +1422,34 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             if (g < 0) g = 0;
         }
 
+        /* VPM-B sets the first stop the way Baker does: take the ascent
+         * ceiling ONCE, round it UP to the next deeper grid point, and go
+         * straight there. Climbing the grid one step at a time instead lets
+         * the diver off-gas on every leg, so the ceiling recedes ahead of him
+         * and the first stop lands too shallow - measured at 42 m against
+         * MultiDeco's 48 m on 70 m / 26 min with 18/45, and unmoved by any
+         * amount of conservatism, which is the giveaway. The first stop also
+         * anchors Boyle compensation, so getting it wrong propagates through
+         * every stop above it. Buhlmann and VVAL-18 keep the climbing rule. */
+        if (IS_VPM(cfg) && vpm_first_stop < -0.5) {
+            double cd = (ceiling_bar(s) - s->p_surface) / s->bar_per_m;
+            if (cd > 1e-9) {
+                vpm_first_stop = ceil(cd / stop_iv - 1e-9) * stop_iv;
+                if (vpm_first_stop > s->depth)
+                    vpm_first_stop = round_to_stop(s->depth, stop_iv);
+                if (vpm_first_stop < last_stop) vpm_first_stop = last_stop;
+            } else {
+                vpm_first_stop = 0.0;          /* no decompression required */
+            }
+        }
+        /* Hold the ascent at that depth until the stop has been taken; once
+         * it has, VPM.first_ceiling is set and this goes inert. */
+        bool vpm_hold_first = IS_VPM(cfg) && vpm_first_stop > 1e-9
+                           && VPM.first_ceiling <= 0
+                           && g < vpm_first_stop - 1e-9;
+
         /* may we ascend to g right now, given the planned ascent? */
-        if (can_leave(s, g)) {
+        if (!vpm_hold_first && can_leave(s, g)) {
             travel(s, g, true);
             if (g <= 1e-9) break;               /* surfaced */
             /* travel() switches at the mix's MOD mid-water, so by here the
@@ -1466,6 +1493,12 @@ static int run_plan(const zp_config *cfg, zp_result *out,
 
         if (!s->rmv_switched) { s->rmv = cfg->deco_rmv_l_min; s->rmv_switched = 1; }
         if (s->gf_ref_depth <= 0) s->gf_ref_depth = here;
+        /* Capture BEFORE first_ceiling is assigned - the assignment is what
+         * marks the first stop as taken, so testing it afterwards can never
+         * see zero. */
+        bool vpm_is_first_stop = IS_VPM(cfg) && VPM.first_ceiling <= 0
+                              && vpm_first_stop > 1e-9
+                              && fabs(here - vpm_first_stop) < 1e-6;
         if (IS_VPM(cfg) && VPM.first_ceiling <= 0)
             VPM.first_ceiling = pamb(s, here);
         double stop_pre_fo2 = s->fo2, stop_pre_fhe = s->fhe;
@@ -1504,8 +1537,16 @@ static int run_plan(const zp_config *cfg, zp_result *out,
          * afterwards. Stop times and run times then both come out as whole
          * minutes - which is what a diver actually copies onto a slate. */
         if (IS_VPM(cfg)) {
+            /* Baker takes the first stop unconditionally. By the time the
+             * diver has travelled there the ceiling has often receded far
+             * enough to allow the next step already - but the stop is still
+             * made, and the arrival round-up alone is what fills it. The one
+             * minute at 54 m in VPM.OUT is exactly this and nothing else.
+             * Without it the engine reached the right depth, emitted nothing,
+             * and carried on climbing to a first stop two increments shallow. */
             bool need = (lst_do0 ? !can_surface_from_increment(s, stop_iv)
-                                 : !can_leave(s, gg)) || min_time > 1e-9;
+                                 : !can_leave(s, gg)) || min_time > 1e-9
+                        || vpm_is_first_stop;
             if (need) {
                 if (vpm_prev_rt < 0) vpm_prev_rt = floor(arrive_rt + 1e-9);
                 double pad = ceil(arrive_rt - 1e-9) - arrive_rt;

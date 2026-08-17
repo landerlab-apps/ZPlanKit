@@ -146,11 +146,55 @@ water at 0.1005 bar/m against Baker's msw at 0.101325 makes an 80 m dive
 genuinely shallower; deco gas is chosen by Max PO2 rather than at fixed
 depths; and waypoint time is time *at depth* rather than run time.
 
-**One difference is structural and is not a units artefact.** The engine puts
-the first stop at 51 m where Baker puts it at 54 m. Our ascent loop climbs
-until the ceiling stops it, which lands on the shallowest grid point still
-tolerated. Baker rounds the ascent ceiling *up* to the next deeper grid point.
-His is the stricter reading — a 54.6 m ceiling is not honoured by a 54 m stop —
-and it also anchors Boyle compensation one stop deeper, which propagates
-through the whole schedule. Left as it stands for now and logged, because
-changing the first-stop rule touches every model, not just VPM.
+## The first stop — fixed, VPM-B only
+
+The engine used to put the first stop two increments too shallow: 42 m against
+MultiDeco VPM-B/E +2's 48 m on 70 m / 26 min with 18/45, and — the giveaway —
+**unmoved by any amount of conservatism**. +1 through +4 all gave 42 m.
+Conservatism was buying stop time and not stop depth, which is not something a
+bubble model should ever do.
+
+Two separate faults, both VPM-only, both now fixed.
+
+**1. The first stop is computed from the ceiling, not walked up to.** Baker
+takes the ascent ceiling once, rounds it *up* to the next deeper grid point, and
+travels straight there. The engine instead climbed the grid one increment at a
+time, testing at each step whether the next was allowed. Every leg off-gasses
+the diver, so the ceiling recedes ahead of him and the first stop lands too
+shallow. Buhlmann and VVAL-18 keep the climbing rule.
+
+**2. Baker takes the first stop unconditionally.** By the time the diver has
+travelled to it the ceiling has often receded far enough to permit the next step
+already. Baker stops anyway: the run time is rounded up on arrival and *that
+round-up is the stop*. The single minute at 54 m in VPM.OUT is exactly this and
+nothing else. Without it the engine arrived at the right depth, found the
+ceiling clear, emitted nothing, released the hold and carried on climbing.
+
+That second fault hid the first. The subtle part was that `VPM.first_ceiling` is
+assigned a few lines above the test, and the assignment is itself the marker for
+"first stop taken" — so a test written after it could never see zero, and the
+whole branch was dead. It has to be captured before.
+
+### Result
+
+| | first stop | deco |
+|---|---:|---:|
+| MultiDeco VPM-B/E +2 | 48 m | 89 min |
+| Lplanner +0 | 45 m | 67 min |
+| Lplanner +2 | **48 m** | 77 min |
+| Lplanner +4 | **48 m** | 88 min |
+
+The first stop now tracks conservatism and lands on MultiDeco's depth at the
+matching level. Remaining time difference is `/E`, Ross's extended variant,
+which deepens and lengthens stops and is not implemented here.
+
+### What is still different from Baker
+
+On the 80 msw benchmark the engine now puts the first stop at 57 m where Baker
+puts it at 54 m — one increment deep, where it used to be three shallow.
+
+The cause is where the ceiling is taken. Baker travels from the bottom to the
+start of the decompression zone first, then computes the ceiling there; the
+diver has off-gassed on the way. The engine computes it at the bottom, with the
+tissues at their most loaded, so the ceiling is deeper. Erring deep is the safe
+direction and is left as it stands.
