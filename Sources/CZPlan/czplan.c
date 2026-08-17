@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.17.0"
+#define ZP_VERSION "1.18.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -81,6 +81,47 @@ static const double HE_B[ZP_COMPARTMENTS] = {   /* standard ZH-L16 order; the op
  * pressures are [WORKING] estimates. MPTT slope = 1.0 fsw/fsw throughout.
  * All values converted from fsw to bar at 33 fsw = 1 atm (USN convention).
  * ------------------------------------------------------------------ */
+/* Decompression model selector (zp_config.use_vval) */
+#define ZP_MODEL_BUHLMANN 0
+#define ZP_MODEL_VVAL     1
+#define ZP_MODEL_VPMB     2
+#define IS_VVAL(c) ((c)->use_vval == ZP_MODEL_VVAL)
+#define IS_VPM(c)  ((c)->use_vval == ZP_MODEL_VPMB)
+#define IS_BUHL(c) ((c)->use_vval == ZP_MODEL_BUHLMANN)
+
+#define VPM_NC          16          /* the ZH-L16 set; our optional 1b
+                                     * compartment (index 16) is not part of
+                                     * Baker's model and is excluded */
+#define VPM_GAMMA       0.0179      /* surface tension, N/m              */
+#define VPM_GAMMAC      0.257       /* skin compression, N/m             */
+#define VPM_GRAD_IMPERM_BAR (8.2 * P_SEALEVEL)  /* onset of impermeability */
+#define VPM_LAMBDA_FSW  7500.0      /* critical volume parameter, fsw-min */
+#define VPM_REGEN_MIN   20160.0     /* nuclear regeneration time constant */
+#define VPM_OTHER_GASES 0.1359888   /* O2+CO2+H2O in tissue, bar (102 mmHg)*/
+#define VPM_WV_BAR      0.0493      /* water vapour, Schreiner Rq 0.8, bar */
+#define PA_PER_BAR      1.0e5
+
+/* Conservatism 0-4 scales the critical radii. A larger nucleus is excited by
+ * a smaller gradient, so higher levels give more decompression. Same ladder
+ * Subsurface uses; level 0 is Baker's nominal VPM-B. */
+static const double VPM_CONS_LVL[5] = { 1.0, 1.05, 1.12, 1.22, 1.35 };
+
+typedef struct {
+    double max_crush_n2[VPM_NC], max_crush_he[VPM_NC];  /* bar           */
+    double crush_onset[VPM_NC];                         /* bar, tension  */
+    double max_amb;                                     /* bar           */
+    double regen_r_n2[VPM_NC], regen_r_he[VPM_NC];      /* metres        */
+    double init_grad_n2[VPM_NC], init_grad_he[VPM_NC];  /* bar           */
+    double grad_n2[VPM_NC], grad_he[VPM_NC];            /* bar, relaxed  */
+    double spvt[VPM_NC];            /* surface phase volume time, min    */
+    double first_ceiling;           /* bar; 0 until the first stop is set */
+    double deco_min;                /* previous pass's deco time, 0 = none */
+    double zone_runtime;            /* runtime entering the deco zone     */
+    int    in_zone;
+} vpm_state;
+
+static vpm_state VPM;
+
 #define VVAL_NC 12
 #define FSW2BAR (1.01325 / 33.0)
 /* VVal-79 gas-exchange constants, NEDU EL-DCA (Thalmann table-generation
@@ -249,6 +290,8 @@ typedef struct {
     char *warn; size_t warnlen;
 } sim;
 
+static void vpm_crush(const sim *s, double p_amb);
+
 static void warn(sim *s, const char *msg) {
     size_t used = strlen(s->warn);
     if (used + strlen(msg) + 2 < s->warnlen)
@@ -265,8 +308,13 @@ static double alveolar(double p_ambient) {
 /* inspired inert & O2 partial pressures for current source at depth */
 static void inspired(const sim *s, double depth_m,
                      double *pin2, double *pihe, double *pio2) {
-    double pa = alveolar(pamb(s, depth_m));
-    if (s->cfg->use_vval) {
+    double p_ambient = pamb(s, depth_m);
+    /* VPM-B is specified with the Schreiner water vapour (Rq 0.8); Buhlmann
+     * uses Rq 1.0. Same distinction Subsurface makes. */
+    double pa = IS_VPM(s->cfg)
+              ? (p_ambient - VPM_WV_BAR > 0 ? p_ambient - VPM_WV_BAR : 0)
+              : alveolar(p_ambient);
+    if (IS_VVAL(s->cfg)) {
         /* NEDU EL-DCA "UPDT7 Initialize" (Figure 31), both branches:
          *
          *   constant PO2 : PAO2 = PO2 * SURFP * (1 - PH2O/PAMB) - AMBAO2
@@ -341,7 +389,7 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
     double pa_now = pamb(s, depth_m);
     for (int i = 0; i < s->ncomp; i++) {
         double dtn = dt, dth = dt;
-        if (s->cfg->use_vval) {
+        if (IS_VVAL(s->cfg)) {
             /* Thalmann EL-DCM: exponential uptake; during offgassing, a
              * compartment supersaturated beyond its crossover eliminates gas
              * at the constant rate k*Pcross (linear kinetics). */
@@ -428,6 +476,19 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
             s->phe[i] += (pihe - s->phe[i]) * (1.0 - exp(-M_LN2 * dth / HE_HT[i]));
         }
     }
+    if (IS_VPM(s->cfg)) {
+        vpm_crush(s, pa_now);
+        /* Baker measures the phase volume time from the moment the leading
+         * compartment's total tension reaches ambient - the start of the
+         * decompression zone - not from the first stop. */
+        if (s->in_ascent && !VPM.in_zone) {
+            for (int i = 0; i < VPM_NC; i++)
+                if (s->pn2[i] + s->phe[i] + VPM_OTHER_GASES >= pa_now) {
+                    VPM.in_zone = 1; VPM.zone_runtime = s->runtime; break;
+                }
+        }
+    }
+
     double cr, or_;
     o2_rates(pio2 / P_SEALEVEL, &cr, &or_);   /* table is defined in ATM */
     s->cns += cr * dt;
@@ -461,6 +522,177 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
 /* Current gradient factor: GF_lo until the first stop is known, then a
  * linear slope from GF_lo at the first-stop depth to GF_hi at the surface
  * (Erik Baker, "Clearing Up The Confusion About Deep Stops"). */
+/* ------------------------------------------------------------------ */
+/* VPM-B — Yount/Hoffman varying permeability, Erik C. Baker's          */
+/* implementation. Ported from Baker's FORTRAN ("DISTRIBUTE FREELY -    */
+/* CREDIT THE AUTHORS") and cross-read against Subsurface core/deco.c.  */
+/* Validated against Baker's own VPM.OUT: see Reference/vpmb_ref.c and  */
+/* Reference/vpmb_validation.md.                                        */
+/*                                                                      */
+/* Baker computes the nucleus mechanics in Pascals with radii in metres.*/
+/* That is kept verbatim; conversion to bar happens only at the edges.  */
+/* ------------------------------------------------------------------ */
+
+
+static double vpm_r_n2(const zp_config *c) {
+    double r = c->vpm_radius_n2_um > 0 ? c->vpm_radius_n2_um : 0.6;
+    int lv = c->vpm_conservatism; if (lv < 0) lv = 0; if (lv > 4) lv = 4;
+    return r * VPM_CONS_LVL[lv] * 1.0e-6;
+}
+static double vpm_r_he(const zp_config *c) {
+    double r = c->vpm_radius_he_um > 0 ? c->vpm_radius_he_um : 0.5;
+    int lv = c->vpm_conservatism; if (lv < 0) lv = 0; if (lv > 4) lv = 4;
+    return r * VPM_CONS_LVL[lv] * 1.0e-6;
+}
+
+/* Solve A*r^3 - B*r^2 - C = 0 by bisection on [lo,hi]. Baker uses Newton with
+ * a bisection fallback; plain bisection reaches the same root and cannot
+ * diverge on a degenerate bracket. */
+static double vpm_root(double A, double B, double C, double lo, double hi) {
+    double flo = lo * (lo * (A * lo - B)) - C;
+    double fhi = hi * (hi * (A * hi - B)) - C;
+    double a = lo, b = hi, fa = flo, mid = lo, fm;
+    if (flo * fhi > 0.0) return (fabs(flo) < fabs(fhi)) ? lo : hi;
+    for (int i = 0; i < 160; i++) {
+        mid = 0.5 * (a + b);
+        fm  = mid * (mid * (A * mid - B)) - C;
+        if (fm == 0.0 || (b - a) <= 0.0) break;
+        if (fa * fm < 0.0) b = mid; else { a = mid; fa = fm; }
+    }
+    return mid;
+}
+
+/* Inner pressure of a nucleus that has gone impermeable (bar). */
+static double vpm_inner_pressure(double crit_r, double onset_tension,
+                                 double p_amb) {
+    double dg = 2.0 * (VPM_GAMMAC - VPM_GAMMA);
+    double r_onset = 1.0 /
+        (VPM_GRAD_IMPERM_BAR * PA_PER_BAR / dg + 1.0 / crit_r);
+    double A = (p_amb - VPM_GRAD_IMPERM_BAR) * PA_PER_BAR + dg / r_onset;
+    double B = dg;
+    double C = onset_tension * PA_PER_BAR * r_onset * r_onset * r_onset;
+    double r = vpm_root(A, B, C, B / A, r_onset);
+    return onset_tension * (r_onset * r_onset * r_onset) / (r * r * r);
+}
+
+static void vpm_clear(void) {
+    memset(&VPM, 0, sizeof VPM);
+}
+
+/* CALC_CRUSHING_PRESSURE. Called every tick; the maximum over the dive is
+ * what the model uses, so evaluating continuously handles multi-level and
+ * repetitive descents without special cases. */
+static void vpm_crush(const sim *s, double p_amb) {
+    for (int i = 0; i < VPM_NC; i++) {
+        double tension  = s->pn2[i] + s->phe[i] + VPM_OTHER_GASES;
+        double gradient = p_amb - tension;
+        double cn2, che;
+        if (gradient <= VPM_GRAD_IMPERM_BAR) {      /* permeable */
+            cn2 = che = gradient;
+            VPM.crush_onset[i] = tension;
+        } else {                                     /* impermeable */
+            if (VPM.max_amb >= p_amb) continue;
+            cn2 = p_amb - vpm_inner_pressure(vpm_r_n2(s->cfg),
+                                             VPM.crush_onset[i], p_amb);
+            che = p_amb - vpm_inner_pressure(vpm_r_he(s->cfg),
+                                             VPM.crush_onset[i], p_amb);
+        }
+        if (cn2 > VPM.max_crush_n2[i]) VPM.max_crush_n2[i] = cn2;
+        if (che > VPM.max_crush_he[i]) VPM.max_crush_he[i] = che;
+    }
+    if (p_amb > VPM.max_amb) VPM.max_amb = p_amb;
+}
+
+/* NUCLEAR_REGENERATION followed by CALC_INITIAL_ALLOWABLE_GRADIENT. */
+static void vpm_regenerate(const zp_config *c, double dive_min) {
+    double dg  = 2.0 * (VPM_GAMMAC - VPM_GAMMA);
+    double num = 2.0 * VPM_GAMMA * (VPM_GAMMAC - VPM_GAMMA);
+    double rn = vpm_r_n2(c), rh = vpm_r_he(c);
+    double decay = exp(-dive_min / VPM_REGEN_MIN);
+    for (int i = 0; i < VPM_NC; i++) {
+        double crushed_n2 = 1.0 /
+            (VPM.max_crush_n2[i] * PA_PER_BAR / dg + 1.0 / rn);
+        double crushed_he = 1.0 /
+            (VPM.max_crush_he[i] * PA_PER_BAR / dg + 1.0 / rh);
+        VPM.regen_r_n2[i] = rn + (crushed_n2 - rn) * decay;
+        VPM.regen_r_he[i] = rh + (crushed_he - rh) * decay;
+        VPM.init_grad_n2[i] =
+            num / (VPM.regen_r_n2[i] * VPM_GAMMAC) / PA_PER_BAR;
+        VPM.init_grad_he[i] =
+            num / (VPM.regen_r_he[i] * VPM_GAMMAC) / PA_PER_BAR;
+        VPM.grad_n2[i] = VPM.init_grad_n2[i];
+        VPM.grad_he[i] = VPM.init_grad_he[i];
+    }
+}
+
+/* CRITICAL_VOLUME: relax the gradients given the phase volume time. Always
+ * computed from the INITIAL gradients, never compounded, so the loop is a
+ * fixed-point iteration rather than a ratchet. */
+static void vpm_next_gradient(double deco_min) {
+    double lambda_pa = (VPM_LAMBDA_FSW / 33.0) * (P_SEALEVEL * PA_PER_BAR);
+    for (int i = 0; i < VPM_NC; i++) {
+        double pvt = deco_min + VPM.spvt[i];
+        if (pvt < 1e-6) continue;
+        double ig, crush, B, C, disc;
+
+        ig = VPM.init_grad_n2[i] * PA_PER_BAR;
+        crush = VPM.max_crush_n2[i] * PA_PER_BAR;
+        B = ig + (lambda_pa * VPM_GAMMA) / (VPM_GAMMAC * pvt);
+        C = (VPM_GAMMA * VPM_GAMMA * lambda_pa * crush)
+          / (VPM_GAMMAC * VPM_GAMMAC * pvt);
+        disc = B * B - 4.0 * C;
+        if (disc > 0) VPM.grad_n2[i] = (B + sqrt(disc)) / 2.0 / PA_PER_BAR;
+
+        ig = VPM.init_grad_he[i] * PA_PER_BAR;
+        crush = VPM.max_crush_he[i] * PA_PER_BAR;
+        B = ig + (lambda_pa * VPM_GAMMA) / (VPM_GAMMAC * pvt);
+        C = (VPM_GAMMA * VPM_GAMMA * lambda_pa * crush)
+          / (VPM_GAMMAC * VPM_GAMMAC * pvt);
+        disc = B * B - 4.0 * C;
+        if (disc > 0) VPM.grad_he[i] = (B + sqrt(disc)) / 2.0 / PA_PER_BAR;
+    }
+}
+
+/* CALC_SURFACE_PHASE_VOLUME_TIME — the out-of-water part of the integration
+ * of supersaturation gradient x time, with Baker's three-branch helium case. */
+static void vpm_surface_phase(const sim *s) {
+    double surf_n2 = (s->p_surface - VPM_WV_BAR) * 0.79;
+    for (int i = 0; i < VPM_NC; i++) {
+        double he = s->phe[i], n2 = s->pn2[i];
+        double khe = M_LN2 / HE_HT[i], kn2 = M_LN2 / N2_HT[i];
+        if (n2 > surf_n2) {
+            VPM.spvt[i] = (he / khe + (n2 - surf_n2) / kn2)
+                        / (he + n2 - surf_n2);
+        } else if (he + n2 >= surf_n2 && he > 1e-12) {
+            double decay = 1.0 / (kn2 - khe) * log((surf_n2 - n2) / he);
+            double integral = he / khe * (1.0 - exp(-khe * decay))
+                            + (n2 - surf_n2) / kn2 * (1.0 - exp(-kn2 * decay));
+            VPM.spvt[i] = integral / (he + n2 - surf_n2);
+        } else {
+            VPM.spvt[i] = 0.0;
+        }
+    }
+}
+
+/* Boyle's law compensation. As the bubble rises it expands, so the gradient
+ * it tolerates shrinks. Using pV = (G + P_amb)/G^3 = const avoids solving for
+ * radii: G^3 - B*G - C = 0. Algebraically identical to Baker's radius form. */
+static double vpm_solve_cubic2(double B, double C) {
+    double disc = 27.0 * C * C - 4.0 * B * B * B;
+    if (disc < 0.0)
+        return 2.0 * sqrt(B / 3.0) *
+               cos(acos(3.0 * C * sqrt(3.0 / B) / (2.0 * B)) / 3.0);
+    double den = pow(9.0 * C + sqrt(3.0 * disc), 1.0 / 3.0);
+    return pow(2.0 / 3.0, 1.0 / 3.0) * B / den + den / pow(18.0, 1.0 / 3.0);
+}
+
+static double vpm_boyle_gradient(double next_p, double g_first) {
+    double B = (g_first * g_first * g_first) / (VPM.first_ceiling + g_first);
+    double C = next_p * B;
+    double g = vpm_solve_cubic2(B, C);
+    return g > 0 ? g : g_first;
+}
+
 static double gf_at(const sim *s, double depth_m) {
     if (!s->cfg->use_gf) return 1.0;
     if (s->gf_force > 0) return s->gf_force;
@@ -482,7 +714,34 @@ static double ceiling_bar(const sim *s) {
      * ("tacks on the stated percentage of additional time at each
      * calculation waypoint for purposes of determining tissue loading"). */
     double worst = 0;
-    if (s->cfg->use_vval) {
+    if (IS_VPM(s->cfg)) {
+        /* VPM-B tolerated ambient pressure. The Boyle-compensated gradient
+         * depends on the ambient pressure we are solving FOR, so the ceiling
+         * is a fixed point: start from the current depth and iterate until it
+         * settles. Above the first stop no compensation applies. */
+        double ref = pamb(s, s->depth);
+        for (int it = 0; it < 24; it++) {
+            double w = 0;
+            for (int i = 0; i < VPM_NC; i++) {
+                double pt = s->pn2[i] + s->phe[i];
+                double gn2 = VPM.grad_n2[i], ghe = VPM.grad_he[i];
+                if (VPM.first_ceiling > 0 && ref < VPM.first_ceiling) {
+                    gn2 = vpm_boyle_gradient(ref, gn2);
+                    ghe = vpm_boyle_gradient(ref, ghe);
+                }
+                double g = (pt > 0)
+                         ? (gn2 * s->pn2[i] + ghe * s->phe[i]) / pt
+                         : (gn2 < ghe ? gn2 : ghe);
+                double tol = pt + VPM_OTHER_GASES - g;
+                if (tol < 0) tol = 0;
+                if (tol > w) w = tol;
+            }
+            if (fabs(w - ref) < 1e-3) { ref = w; break; }
+            ref = w;
+        }
+        return ref;
+    }
+    if (IS_VVAL(s->cfg)) {
         /* MPTT(D) = MPTT0 + 1.0 * D (fsw); tolerated ambient pressure is
          * therefore surface pressure plus the excess tension over MPTT0. */
         for (int i = 0; i < VVAL_NC; i++) {
@@ -929,14 +1188,25 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     vval_pcross_env();
     vval_mptt_he_env();
     vval_slope_env();
-    s->ncomp = cfg->use_vval ? VVAL_NC
+    s->ncomp = IS_VVAL(cfg) ? VVAL_NC
+             : IS_VPM(cfg)  ? VPM_NC
              : (cfg->use_1b ? ZP_COMPARTMENTS : ZP_COMPARTMENTS - 1);
 
     s->gf_ref_depth = -1.0;
 
+    if (IS_VPM(cfg)) {
+        /* Re-accumulated identically on each critical-volume pass; the
+         * relaxed gradients and the surface phase times are what carry over. */
+        memset(VPM.max_crush_n2, 0, sizeof VPM.max_crush_n2);
+        memset(VPM.max_crush_he, 0, sizeof VPM.max_crush_he);
+        memset(VPM.crush_onset,  0, sizeof VPM.crush_onset);
+        VPM.max_amb = 0.0;
+    }
+
     /* initial tissues */
     double pn2_sat = alveolar(s->p_surface) * 0.79;
-    if (cfg->use_vval) pn2_sat = (s->p_surface - VVAL_H2O_BAR) * 0.79;
+    if (IS_VVAL(cfg)) pn2_sat = (s->p_surface - VVAL_H2O_BAR) * 0.79;
+    if (IS_VPM(cfg))  pn2_sat = (s->p_surface - VPM_WV_BAR) * 0.79;
     for (int i = 0; i < ZP_COMPARTMENTS; i++) {
         s->pn2[i] = cfg->have_initial_tissues ? cfg->init_pn2[i] : pn2_sat;
         s->phe[i] = cfg->have_initial_tissues ? cfg->init_phe[i] : 0.0;
@@ -950,27 +1220,38 @@ static int run_plan(const zp_config *cfg, zp_result *out,
      * Decompression Table Development) uses a different probabilistic
      * linear-exponential model and recommends the MK 16 MOD 1 table instead.
      *
-     * The helium handling here — half-times scaled by sqrt(28/4), sharing the
-     * nitrogen MPTT and crossover — is this engine's own extrapolation and has
-     * no reference to be validated against. On 70 m / 26 min with 18/45 it
-     * produces about 22% less decompression than MultiDeco VPM-B/E +2 on the
-     * same dive. Say so, every time. */
-    if (cfg->use_vval) {
+     * The helium handling here — half-times scaled by sqrt(28/4), a mix-weighted
+     * MPTT and projection slope — is this engine's own extrapolation and has no
+     * reference to be validated against.
+     *
+     * The total time is NO LONGER the thing to warn about. Since 1.12.0 (linear
+     * rate, SDR, venous crossover) and 1.14/1.15 (helium slope and MPTT), VVAL-79
+     * trimix runs LONGER than VPM-B, not shorter — measured across 45-90 m on
+     * 21/35 through 13/55, it exceeds VPM-B at nominal conservatism every time.
+     * The warning used to say the opposite; that dated from 1.12.0 and was left
+     * standing after the helium work made it false.
+     *
+     * What is still wrong is the SHAPE. VVAL-79 has neither gradient factors nor
+     * a bubble term, so nothing pulls its first stop deep on a helium mix: on
+     * 80 m / 27 min with 15/45 it first stops at 33 m where VPM-B stops at 51 m.
+     * That is the caution worth giving, and it is now the one given. */
+    if (IS_VVAL(cfg)) {
         for (int w = 0; w < cfg->n_wp; w++)
             if (cfg->wp[w].fhe > 0.001) {
                 warn(s, "VVAL-79 is a nitrogen model: the U.S. Navy publishes no "
                         "helium parameters for it, and the helium handling here is "
-                        "an unvalidated extrapolation. Trimix schedules from this "
-                        "model are shorter than VPM-B and Buhlmann give. Use "
-                        "ZHL16-C with gradient factors for trimix.");
+                        "this project's own unvalidated extrapolation. It begins "
+                        "decompression far shallower on helium than a bubble model "
+                        "does. Use VPM-B, or ZHL16-C with gradient factors, for "
+                        "trimix.");
                 break;
             }
     }
     if (cfg->have_initial_tissues && cfg->surface_interval_min > 0) {
         double t = cfg->surface_interval_min;
         for (int i = 0; i < s->ncomp; i++) {
-            double htn = cfg->use_vval ? VVAL_HT_N2[i] : N2_HT[i];
-            double hth = cfg->use_vval ? VVAL_HT_N2[i]/VVAL_HE_RATIO : HE_HT[i];
+            double htn = IS_VVAL(cfg) ? VVAL_HT_N2[i] : N2_HT[i];
+            double hth = IS_VVAL(cfg) ? VVAL_HT_N2[i]/VVAL_HE_RATIO : HE_HT[i];
             s->pn2[i] = pn2_sat + (s->pn2[i]-pn2_sat)*exp(-M_LN2*t/htn);
             s->phe[i] = s->phe[i]*exp(-M_LN2*t/hth);
         }
@@ -981,7 +1262,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
      * previous dive had been made. When the planned profile uses trimix,
      * the extra inert gas is split between N2 and He in the proportion of
      * the deepest waypoint's inert fractions. */
-    if (cfg->conservatism_pct > 0 && !(cfg->use_gf && !cfg->use_vval)) {
+    if (cfg->conservatism_pct > 0 && !(cfg->use_gf && !IS_VVAL(cfg)) && !IS_VPM(cfg)) {
         double c = cfg->conservatism_pct / 100.0;
         if (c > 0.5) c = 0.5;
         double fn2 = 1.0, fhe = 0.0, dmax = -1.0;
@@ -1071,7 +1352,20 @@ static int run_plan(const zp_config *cfg, zp_result *out,
      * this point is bottom gas spent getting to and staying at depth. */
     s->in_ascent = true;
 
+    if (IS_VPM(cfg)) {
+        /* Crushing pressure has been accumulating all the way down and along
+         * the bottom. Regenerate the nuclei over the dive time, derive the
+         * initial allowable gradients, then apply the Critical Volume
+         * Algorithm using the deco time measured on the previous pass. */
+        vpm_regenerate(cfg, s->runtime);
+        if (VPM.deco_min > 0) vpm_next_gradient(VPM.deco_min);
+        VPM.first_ceiling = 0;
+        VPM.in_zone = 0;
+        VPM.zone_runtime = s->runtime;
+    }
+
     double leg_start = s->runtime;
+    double vpm_prev_rt = -1.0;      /* run time ending the previous VPM stop */
     while (s->depth > 1e-9) {
         /* mandated deep stop below us? honour it first */
         double next_deep = (deep_idx < n_deep) ? deep[deep_idx].depth : -1;
@@ -1172,6 +1466,8 @@ static int run_plan(const zp_config *cfg, zp_result *out,
 
         if (!s->rmv_switched) { s->rmv = cfg->deco_rmv_l_min; s->rmv_switched = 1; }
         if (s->gf_ref_depth <= 0) s->gf_ref_depth = here;
+        if (IS_VPM(cfg) && VPM.first_ceiling <= 0)
+            VPM.first_ceiling = pamb(s, here);
         double stop_pre_fo2 = s->fo2, stop_pre_fhe = s->fhe;
         bool stop_pre_cc = s->cc;
         select_deco_source(s, s->depth);
@@ -1180,7 +1476,8 @@ static int run_plan(const zp_config *cfg, zp_result *out,
                              s->cc != stop_pre_cc;
 
         double quantum = 1.0;                    /* whole-minute stops */
-        if (here <= last_stop + 1e-9 && cfg->deepstops != ZP_DEEPSTOPS_NONE)
+        if (here <= last_stop + 1e-9 && cfg->deepstops != ZP_DEEPSTOPS_NONE
+            && !IS_VPM(cfg))
             quantum = 0.1;                       /* 6 s final stop, deep mode */
         double min_time = 0;
         for (int mi = 0; mi < n_min; mi++)
@@ -1199,7 +1496,27 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         bool at_last = (here <= last_stop + 1e-9);
         double gg = at_last ? 0
                   : (here - stop_iv < last_stop ? last_stop : here - stop_iv);
-        bool lst_do0 = at_last && cfg->use_vval;
+        bool lst_do0 = at_last && IS_VVAL(cfg);
+
+        /* VPM-B follows Baker: on arriving at a stop the run time is rounded
+         * up to the next whole stop increment BEFORE the ceiling is tested,
+         * so the travel leg is absorbed into this stop rather than padded on
+         * afterwards. Stop times and run times then both come out as whole
+         * minutes - which is what a diver actually copies onto a slate. */
+        if (IS_VPM(cfg)) {
+            bool need = (lst_do0 ? !can_surface_from_increment(s, stop_iv)
+                                 : !can_leave(s, gg)) || min_time > 1e-9;
+            if (need) {
+                if (vpm_prev_rt < 0) vpm_prev_rt = floor(arrive_rt + 1e-9);
+                double pad = ceil(arrive_rt - 1e-9) - arrive_rt;
+                while (pad > 1e-9) {
+                    double dt = pad < DT ? pad : DT;
+                    tick(s, s->depth, dt, false); pad -= dt;
+                }
+                stop_time = s->runtime - arrive_rt;
+            }
+        }
+
         while (((lst_do0 ? !can_surface_from_increment(s, stop_iv)
                          : !can_leave(s, gg)) || stop_time < min_time - 1e-9)
                && stop_time < 24.0*60.0) {
@@ -1214,7 +1531,13 @@ static int run_plan(const zp_config *cfg, zp_result *out,
          * above, conservative) is kept, but no stop line is emitted. */
         /* MultiDeco / TechDeco convention: the ascent leg into a stop counts
          * toward that stop, and the total is rounded up to a whole minute. */
-        if (stop_time > 1e-9 && !cfg->use_vval) {
+        if (stop_time > 1e-9 && IS_VPM(cfg)) {
+            /* Report Baker's quantity: the difference between consecutive
+             * whole run times. Integral by construction. */
+            stop_time = s->runtime - vpm_prev_rt;
+            vpm_prev_rt = s->runtime;
+        }
+        else if (stop_time > 1e-9 && !IS_VVAL(cfg)) {
             double leg = arrive_rt - leg_start;
             double total = leg + stop_time;
             double want = ceil(total - 1e-9);
@@ -1295,6 +1618,10 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     memcpy(out->end_phe, s->phe, sizeof s->phe);
     out->end_cns_pct = s->cns;
 
+    /* The out-of-water half of the phase volume integration, from the tissue
+     * state we surface with. Feeds the next critical-volume pass. */
+    if (IS_VPM(cfg)) vpm_surface_phase(s);
+
     /* ------- time to fly: off-gas at surface on air until the ceiling
        tolerates 10,000 ft cabin pressure ------- */
     {
@@ -1319,10 +1646,10 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     return 0;
 }
 
-int zp_plan(const zp_config *cfg, zp_result *out) {
+static int zp_plan_pass(const zp_config *cfg, zp_result *out) {
     /* With gradient factors, GF-low provides the deep-stop function; the
      * Pyle post-process is disabled (owner spec, v1.4). */
-    if (cfg->use_gf && !cfg->use_vval && cfg->deepstops != ZP_DEEPSTOPS_NONE)
+    if (cfg->use_gf && IS_BUHL(cfg) && cfg->deepstops != ZP_DEEPSTOPS_NONE)
         ((zp_config *)cfg)->deepstops = ZP_DEEPSTOPS_NONE;
     memset(out, 0, sizeof *out);
     extra_stop deep[32]; int n_deep = 0;
@@ -1400,6 +1727,45 @@ int zp_plan(const zp_config *cfg, zp_result *out) {
     return r;
 }
 
+int zp_plan(const zp_config *cfg, zp_result *out) {
+    if (!IS_VPM(cfg)) return zp_plan_pass(cfg, out);
+
+    /* VPM-B CRITICAL VOLUME LOOP.
+     *
+     * The allowable gradients are relaxed until the volume of gas released
+     * settles. Each relaxation is computed from the INITIAL gradients rather
+     * than compounded, so this is a fixed-point iteration on deco time and it
+     * converges rather than ratcheting. Baker's rule: converged when the total
+     * phase volume time changes by one minute or less in any one compartment.
+     *
+     * Note this differs by about two minutes from Baker's own VPM.EXE on the
+     * 80 msw benchmark, which stops after a single relaxation. See
+     * Reference/vpmb_validation.md. */
+    vpm_clear();
+    double last_pvt[VPM_NC];
+    for (int i = 0; i < VPM_NC; i++) last_pvt[i] = 0.0;
+
+    int rc = 0;
+    for (int pass = 0; pass < 16; pass++) {
+        rc = zp_plan_pass(cfg, out);
+        if (rc) return rc;
+
+        double deco = VPM.in_zone ? (out->runtime_min - VPM.zone_runtime)
+                                  : out->total_deco_min;
+        if (deco < 0) deco = 0;
+
+        int converged = 0;
+        for (int i = 0; i < VPM_NC; i++) {
+            double pvt = deco + VPM.spvt[i];
+            if (pass > 0 && fabs(pvt - last_pvt[i]) <= 1.0) converged = 1;
+            last_pvt[i] = pvt;
+        }
+        if (converged || deco <= 0) break;
+        VPM.deco_min = deco;
+    }
+    return rc;
+}
+
 /* ------------------------------------------------------------------ */
 /* profile.dat parser (ZPlan dialect)                                  */
 /* ------------------------------------------------------------------ */
@@ -1413,6 +1779,9 @@ void zp_config_init(zp_config *cfg) {
     cfg->last_stop_depth_m = 3.048;
     cfg->deepstops = ZP_DEEPSTOPS_NONE;
     cfg->pyle_stop_min = 2.0;
+    cfg->vpm_conservatism = 0;        /* Baker nominal VPM-B */
+    cfg->vpm_radius_n2_um = 0.6;      /* VPM.SET defaults */
+    cfg->vpm_radius_he_um = 0.5;
     cfg->rmv_l_min = 0.6 * L_PER_CUFT;
     cfg->deco_rmv_l_min = 0.6 * L_PER_CUFT;
     cfg->oc_deco_max_po2 = 1.55;
@@ -1485,6 +1854,13 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 else cfg->deepstops = ZP_DEEPSTOPS_NONE;
             }
             else if (!strcmp(key, "pylestoptime")) cfg->pyle_stop_min = atof(val);
+            else if (!strcmp(key, "vpmconservatism")) {
+                cfg->vpm_conservatism = atoi(val);
+                if (cfg->vpm_conservatism < 0) cfg->vpm_conservatism = 0;
+                if (cfg->vpm_conservatism > 4) cfg->vpm_conservatism = 4;
+            }
+            else if (!strcmp(key, "vpmradiusn2")) cfg->vpm_radius_n2_um = atof(val);
+            else if (!strcmp(key, "vpmradiushe")) cfg->vpm_radius_he_um = atof(val);
             else if (!strcmp(key, "tissuefile")) { /* handled by caller */ }
             else if (!strcmp(key, "surfaceinterval")) {
                 int h = 0, m = 0;
@@ -1509,8 +1885,9 @@ int zp_parse_profile(const char *text, zp_config *cfg,
             }
             else if (!strcmp(key, "gflow"))  { cfg->gf_lo = atof(val) > 1.0 ? atof(val)/100.0 : atof(val); cfg->use_gf = true; }
             else if (!strcmp(key, "model")) {
-                if (!strncmp(val, "vval", 4)) cfg->use_vval = 1;
-                else cfg->use_vval = 0;      /* any Buhlmann request -> ZHL-16C */
+                if (!strncmp(val, "vval", 4)) cfg->use_vval = ZP_MODEL_VVAL;
+                else if (!strncmp(val, "vpm", 3)) cfg->use_vval = ZP_MODEL_VPMB;
+                else cfg->use_vval = ZP_MODEL_BUHLMANN;  /* any Buhlmann -> ZHL-16C */
                 cfg->use_b_values = false;
             }
             else if (!strcmp(key, "rmvmetric")) cfg->rmv_metric = truthy(val) ? 1 : 0;
@@ -1647,8 +2024,11 @@ int zp_report(const zp_config *cfg, const zp_result *res,
     const char *du = metric ? "m" : "ft";
 
     APP("                          v%s\n", zp_version());
-    if (cfg->use_vval)
+    if (IS_VVAL(cfg))
         APP("              U.S. Navy EL-DCM (VVAL-18)\n\n");
+    else if (IS_VPM(cfg))
+        APP("        VPM-B  (Yount/Hoffman, Baker)  conservatism %d\n\n",
+            cfg->vpm_conservatism);
     else if (cfg->use_gf)
         APP("     Buhlmann ZHL-16C + gradient factors %.0f/%.0f\n\n",
             (cfg->gf_lo > 0 ? cfg->gf_lo : 0.30) * 100.0,

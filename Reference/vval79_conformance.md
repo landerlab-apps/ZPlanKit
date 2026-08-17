@@ -252,6 +252,36 @@ effect on it. This is a second, independent defect and it has not been found.
 against 89. The direction of the error has reversed, which is the less
 forgiving direction.
 
+> **SUPERSEDED at engine 1.18.0.** True as measured at 1.12.0, and no longer
+> true. The helium work in 1.14.0 and 1.15.0 (mix-weighted MPTT, per-gas
+> projection slope) lengthened VVAL-79 trimix substantially, and with VPM-B now
+> implemented in-engine it can be measured directly rather than against
+> MultiDeco. VVAL-79 comes out **longer** than VPM-B at nominal conservatism on
+> every trimix profile tested, 45 m to 90 m, 21/35 through 13/55:
+>
+> | dive | VVAL-79 | ZHL raw | ZHL 30/85 | VPM-B +0 |
+> |---|---:|---:|---:|---:|
+> | 45 m / 25 min 21/35 | 26 | 15 | 25 | 19 |
+> | 55 m / 25 min 18/45 | 50 | 29 | 47 | 36 |
+> | 70 m / 26 min 18/45 | 85 | 50 | 83 | 64 |
+> | 80 m / 27 min 15/45 | 121 | 78 | 131 | 103 |
+> | 90 m / 20 min 13/55 | 130 | 81 | 145 | 117 |
+>
+> So total time is no longer the thing to warn about. **The shape still is.**
+> VVAL-79 has neither gradient factors nor a bubble term, so nothing pulls its
+> first stop deep on helium:
+>
+> | dive | VVAL-79 | ZHL 30/85 | VPM-B +0 |
+> |---|---:|---:|---:|
+> | 70 m / 26 min 18/45 | 27 m | 39 m | 39 m |
+> | 80 m / 27 min 15/45 | 33 m | 48 m | 51 m |
+> | 90 m / 20 min 13/55 | 39 m | 54 m | 60 m |
+>
+> It spends longer than VPM-B overall while starting eighteen metres shallower,
+> which is the combination bubble models exist to avoid. The in-app warning was
+> rewritten at 1.18.0 to say this instead of the old, now-inverted claim about
+> total time.
+
 ## Why VVAL now warns on helium
 
 There is no U.S. Navy EL-DCM helium table to validate against, and this is not a

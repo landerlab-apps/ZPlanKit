@@ -113,7 +113,8 @@ extension Color {
 /// `algorithms` names the models the build actually ships, so Lplanner79 says
 /// VVAL-79 rather than VVAL-18.
 public struct Disclaimer {
-    public static var algorithms = "A. A. Buhlmann's algorithm or VVAL-18 algorithm"
+    public static var algorithms =
+        "A. A. Buhlmann's algorithm, the VVAL-18 algorithm, or the VPM-B algorithm"
 
     public static var text: String {
         "This generated dive schedule could indirectly kill you and probably has "
@@ -279,7 +280,12 @@ final class PlannerModel: ObservableObject {
     @Published var rmvMetric = true             // RMVs: Cu.ft / Liters
     @Published var saltWater = true             // Water: Fresh / Salt
     @Published var o2Narcotic = false           // O2 Narcotic: No / Yes
-    @Published var model = "c"                  // "c" (ZHL16-C) or "vval"
+    @Published var model = "c"                  // "c" ZHL16-C, "vval" VVAL-18, "vpm" VPM-B
+    // VPM-B settings. Conservatism 0-4 scales both critical radii; 0 is
+    // Baker's nominal VPM-B, which is what reproduces his published VPM.OUT.
+    @Published var vpmConservatism = 0.0
+    @Published var vpmRadiusN2 = "0.6"
+    @Published var vpmRadiusHe = "0.5"
     @Published var useGF = false
     @Published var gfLow = "30"
     @Published var gfHigh = "85"
@@ -434,7 +440,7 @@ final class PlannerModel: ObservableObject {
         UseMetric: \(depthsMetric ? "y" : "n")
         RmvMetric: \(rmvMetric ? "y" : "n")
         SaltWater: \(saltWater ? "y" : "n")
-        Model: \(model == "vval" ? "vval18" : "zhl16c")
+        Model: \(model == "vval" ? "vval18" : model == "vpm" ? "vpm" : "zhl16c")
         Altitude: \(altitude)
         Conservatism: \(Int(conservatism))
         Precision: 1
@@ -455,7 +461,12 @@ final class PlannerModel: ObservableObject {
         ExtStopShallow: \(extStopShallow)
         ExtStopDeep: \(extStopDeep)
         """
-        if (useGF || useAltGF) && model != "vval" {
+        if model == "vpm" {
+            p += "\nVpmConservatism: \(Int(vpmConservatism))"
+            p += "\nVpmRadiusN2: \(vpmRadiusN2)"
+            p += "\nVpmRadiusHe: \(vpmRadiusHe)"
+        }
+        if (useGF || useAltGF) && model == "c" {
             let lo = useAltGF ? altGfLow : gfLow
             let hi = useAltGF ? altGfHigh : gfHigh
             p += "\nGradientFactors: \(lo), \(hi)"
@@ -581,6 +592,8 @@ final class PlannerModel: ObservableObject {
         var modelText: String
         if model == "vval" {
             modelText = "VVAL-18"
+        } else if model == "vpm" {
+            modelText = "VPM-B +\(Int(vpmConservatism))"
         } else if gfOn {
             let lo = useAltGF ? altGfLow : gfLow
             let hi = useAltGF ? altGfHigh : gfHigh
@@ -607,7 +620,12 @@ final class PlannerModel: ObservableObject {
     }
 
     /// Gradient factors active — they override Conservatism.
-    var gfOn: Bool { (useGF || useAltGF) && model != "vval" }
+    var gfOn: Bool { (useGF || useAltGF) && model == "c" }
+
+    /// Conservatism preloads the tissues; it applies to the Buhlmann model
+    /// only, and only when gradient factors are off. VPM-B has its own
+    /// conservatism ladder and ignores this one.
+    var consOn: Bool { model == "c" && !gfOn }
 
     private func appendLog() {
         guard !planText.isEmpty else { return }
@@ -908,8 +926,8 @@ public struct ZPlannerView: View {
                 TextField("", text: $m.altGfHigh)
                     .textFieldStyle(.roundedBorder).frame(width: 44)
             }
-            .opacity(m.model == "vval" ? 0.4 : 1)
-            .disabled(m.model == "vval")
+            .opacity(m.model == "c" ? 1 : 0.4)
+            .disabled(m.model != "c")
             Spacer()
         }.padding(.horizontal, 12).padding(.vertical, 6)
     }
@@ -1026,12 +1044,13 @@ struct ConfigSheet: View {
                         row("O2 Narcotic") { seg($m.o2Narcotic, off: "No", on: "Yes") }
                     }
                     group("Model",
-                          help: "ZHL16-C is the Buhlmann set used here. VVAL-18 is the U.S. Navy Thalmann EL-DCM (exponential uptake, linear elimination); gradient factors and Conservatism do not apply to it. With gradient factors enabled, Pyle deep stops are disabled — GF Low provides the deep-stop function — and Conservatism is ignored.") {
+                          help: "ZHL16-C is the Buhlmann set used here. VVAL-18 is the U.S. Navy Thalmann EL-DCM (exponential uptake, linear elimination). VPM-B is the Yount/Hoffman varying permeability bubble model in Erik Baker's implementation — it limits the volume of gas released from bubble nuclei rather than the tension dissolved in tissue, which is why it puts the first stop much deeper, especially on helium mixes. Gradient factors and Conservatism apply to ZHL16-C only; VVAL-18 has neither, and VPM-B has its own conservatism ladder. With gradient factors enabled, Pyle deep stops are disabled — GF Low provides the deep-stop function — and Conservatism is ignored.") {
                         Picker("", selection: $m.model) {
                             Text("ZHL16-C").tag("c")
                             Text("VVAL-18").tag("vval")
+                            Text("VPM-B").tag("vpm")
                         }.pickerStyle(.segmented).labelsHidden()
-                        if m.model != "vval" {
+                        if m.model == "c" {
                             Toggle("Gradient factors", isOn: $m.useGF)
                             HStack(spacing: 16) {
                                 row2("GF Low", $m.gfLow)
@@ -1041,7 +1060,22 @@ struct ConfigSheet: View {
                             .opacity(m.useGF ? 1 : 0.4)
                         }
                     }
-                    if m.model != "vval" {
+                    if m.model == "vpm" {
+                        group("VPM-B",
+                              help: "Conservatism 0–4 scales both critical radii: a larger nucleus is excited by a smaller gradient, so higher levels give more decompression. Level 0 is Baker's nominal VPM-B and is the setting that reproduces his published reference schedule. The critical radii are the parameter that actually differs between implementations — Baker ships 0.6 and 0.5 microns, Subsurface 0.55 and 0.45. Changing them takes you outside the validated envelope, so leave them alone unless you are deliberately comparing against another planner.") {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Conservatism: +\(Int(m.vpmConservatism))   (0 = nominal VPM-B)")
+                                Slider(value: $m.vpmConservatism, in: 0...4, step: 1)
+                                    .frame(maxWidth: 360)
+                                    .tint(.secondary)
+                            }
+                            HStack(spacing: 16) {
+                                row2("Radius N2 (um)", $m.vpmRadiusN2)
+                                row2("Radius He (um)", $m.vpmRadiusHe)
+                            }
+                        }
+                    }
+                    if m.model == "c" {
                         group("Alternative gradient factors",
                               help: "A second GF pair, used instead of the main pair whenever altGF is checked on the main screen. Set these to whatever you like — any values are accepted, low and high independently, and they need not bracket the main pair. 100/100 gives the pure Buhlmann ZHL-16C ceiling; values above 100 go beyond it (less conservative than the raw model); a low GF Low with a high GF High deepens the first stop while keeping the shallow stops short. Editable here or directly beside the altGF checkbox on the main screen.") {
                             HStack(spacing: 16) {
@@ -1063,14 +1097,19 @@ struct ConfigSheet: View {
                           help: "Altitude of the dive site (0 for sea level; be extra conservative if you are still off-gassing from travel to altitude). Conservatism applies only when gradient factors are switched off. It (0–50 %) preloads the tissue compartments with additional inert gas — nitrogen, and helium in proportion when the profile uses trimix — weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.") {
                         row2("Altitude", $m.altitude)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(gfOn ? "Conservatism — not used with gradient factors"
-                                      : "Conservatism: \(Int(m.conservatism)) %  (0–50 maximum)")
+                            Text(m.model == "vpm"
+                                   ? "Conservatism — VPM-B uses its own, above"
+                                   : m.model == "vval"
+                                   ? "Conservatism — not used by VVAL-18"
+                                   : gfOn
+                                   ? "Conservatism — not used with gradient factors"
+                                   : "Conservatism: \(Int(m.conservatism)) %  (0–50 maximum)")
                             Slider(value: $m.conservatism, in: 0...50, step: 1)
                                 .frame(maxWidth: 360)
                                 .tint(.secondary)
-                                .disabled(gfOn)
+                                .disabled(!m.consOn)
                         }
-                        .opacity(gfOn ? 0.4 : 1)
+                        .opacity(m.consOn ? 1 : 0.4)
                     }
                     // Stop grid stands on its own. It used to live inside Deep
                     // stops, which hid it completely whenever gradient factors
@@ -1084,7 +1123,7 @@ struct ConfigSheet: View {
                             row2("Last stop", $m.lastStop)
                         }
                     }
-                    if !(m.useGF && m.model != "vval") {
+                    if !(m.useGF && m.model == "c") {
                         group("Deep stops",
                               help: "Pyle deep stops insert short stops between the bottom and the first normal stop (mean-depth rule, re-run iteratively) to reduce microbubble formation and post-dive fatigue. Pyle stop time is the minutes spent at each generated stop (1–5). Not shown when gradient factors are enabled: GF Low takes over the deep-stop role.") {
                             Picker("", selection: $m.deepStops) {
@@ -1155,7 +1194,7 @@ struct ConfigSheet: View {
     }
 
     /// Gradient factors active (they override Conservatism).
-    private var gfOn: Bool { (m.useGF || m.useAltGF) && m.model != "vval" }
+    private var gfOn: Bool { (m.useGF || m.useAltGF) && m.model == "c" }
 
     // ---- layout helpers: fixed label widths so nothing truncates ----
     private func group<C: View>(_ title: String, help: String,

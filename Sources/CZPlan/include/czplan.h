@@ -66,6 +66,14 @@ typedef struct {
      * compartments per the owner's parameters.py; the three fastest
      * compartments and the crossover pressures are WORKING values. */
     int    use_vval;
+    /* VPM-B settings. Conservatism 0-4 scales both critical radii (0 is
+     * Baker's nominal VPM-B). The radii themselves are the parameter that
+     * actually differs between implementations: Baker ships 0.6/0.5 microns,
+     * Subsurface 0.55/0.45. Only 0.6/0.5 reproduces Baker's published
+     * VPM.OUT. */
+    int    vpm_conservatism;
+    double vpm_radius_n2_um;
+    double vpm_radius_he_um;
     int    rmv_metric;         /* -1 follow UseMetric, 0 cu.ft, 1 litres */
     double slide_rate;         /* Scamahorn slide: PO2 burned off per minute */
     bool   use_1b;            /* include Buhlmann's optional 1b compartment */
