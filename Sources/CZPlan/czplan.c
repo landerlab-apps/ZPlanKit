@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.12.0"
+#define ZP_VERSION "1.13.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -91,6 +91,12 @@ static const double HE_B[ZP_COMPARTMENTS] = {   /* standard ZH-L16 order; the op
 #define VVAL_PVO2_BAR   (2.00 * FSW2BAR)   /* venous O2                      */
 #define VVAL_AMBAO2_BAR (0.00 * FSW2BAR)   /* ambient-arterial O2 gradient   */
 #define VVAL_SDR         0.70              /* saturation/desaturation ratio  */
+/* Metabolic oxygen extraction expressed as a partial-pressure drop: about
+ * 5 mL O2/dL of blood at a dissolved solubility of 0.003 mL/dL/mmHg, so
+ * 1667 mmHg = 72.4 fsw. Below that, haemoglobin unloads and venous PO2 stays
+ * at its resting value; above it, dissolved oxygen alone carries metabolism
+ * and venous PO2 tracks arterial. */
+#define VVAL_O2_METABOLIC_BAR (72.4 * FSW2BAR)
 #define VVAL_CNDSDR_FO2  0.80              /* SDR activation FO2 threshold   */
 #define VVAL_H2O_BAR (1.85 * FSW2BAR)      /* superseded; kept for tissue.dat */
 static const double VVAL_HT_N2[VVAL_NC] = {
@@ -342,7 +348,25 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
              *     boundary tension PVN2 = PVSAT + PBOVP
              * and the linear rate is the exponential slope there,
              *     dP/dt = KDsat * (PA_inert - PVN2). */
-            double pvsat = pa_now - (VVAL_PVO2_BAR + VVAL_PVCO2_BAR + VVAL_PH2O_BAR);
+                /* Oxygen window. PVSAT is the pressure left for inert gas in
+             * venous blood, so what matters here is venous PO2, not the window
+             * itself.
+             *
+             * Venous PO2 is buffered by haemoglobin: it sits at its resting
+             * value however rich the mix, until dissolved oxygen alone can
+             * supply metabolism - about 2.2 ata. The oxygen WINDOW does open
+             * enormously before then (114 mmHg on air at the surface, 1170 on
+             * O2 at 6 m), but that benefit reaches the model through the
+             * ARTERIAL term, where PA_inert = PAMB - PAO2 - PACO2 - PH2O
+             * already falls as PAO2 rises. It is not missing.
+             *
+             * Above 2.2 ata venous PO2 does track arterial, which matters for
+             * chamber and treatment depths. Below it this expression returns
+             * the resting value exactly, so no recreational or technical
+             * schedule moves. */
+            double pvo2 = pio2 - VVAL_O2_METABOLIC_BAR;
+            if (pvo2 < VVAL_PVO2_BAR) pvo2 = VVAL_PVO2_BAR;
+            double pvsat = pa_now - (pvo2 + VVAL_PVCO2_BAR + VVAL_PH2O_BAR);
             double pcross = VVAL_PCROSS_FSW[i] * FSW2BAR;
             double pvn2 = pvsat + pcross;
             double supersat = (s->pn2[i] + s->phe[i]) - pvsat;

@@ -114,3 +114,80 @@ Our model captures the first half and has no representation of the second.
 | VVAL-79 first stop 21 m shallower than VPM-B on trimix | Quantifies what the current trimix warning is warning about |
 | ZHL16-C GF 30/85 matched VPM-B/E +2 on one profile, not this one | **Correction to an earlier claim.** The agreement was profile-specific |
 | Critical volume, crushing pressure, regeneration | Different model |
+
+---
+
+# The oxygen window question, answered — engine 1.13.0
+
+The claim to test: *"oxygen windows vary with the mix; for example with 50% at
+21 m, not just 6 m. Any time O2 is near or above 1.6."* Physically correct. The
+question was whether our `PVSAT` should therefore respond to inspired PO2.
+
+**It should, but not where it looked like it should, and not at those depths.**
+
+`PVSAT = PAMB − (PvO2 + PvCO2 + PH2O)` is the pressure left over for inert gas
+in venous blood. What enters it is **venous** PO2, not the window.
+
+Venous PO2 is buffered by haemoglobin. Metabolic extraction is about 5 mL O2/dL
+of blood; dissolved oxygen has a solubility of 0.003 mL/dL/mmHg, so dissolved
+oxygen alone can only carry metabolism once arterial PO2 exceeds
+
+    5.0 / 0.003 = 1667 mmHg = 72.4 fsw = 2.19 ata
+
+Below that, haemoglobin unloads and venous PO2 stays at its resting value:
+
+| breathing | PaO2 (ata) | PvO2 (mmHg) | oxygen window (mmHg) |
+|---|---:|---:|---:|
+| air, surface | 0.21 | 46 | 114 |
+| air, 40 m | 1.05 | 46 | 752 |
+| **EAN50 @ 21 m** | **1.54** | **46** | **1124** |
+| **O2 @ 6 m** | **1.60** | **46** | **1170** |
+| CCR SP1.30 | 1.30 | 46 | 942 |
+| O2 @ 18 m, chamber | 2.80 | 461 | 1667 |
+
+**The window does open enormously — 114 mmHg on air at the surface against 1170
+on oxygen at 6 m — and that benefit is already in the model.** It arrives
+through the arterial term, `PA_inert = PAMB − PAO2 − PACO2 − PH2O`, which falls
+as PAO2 rises and reaches zero on pure oxygen. On EAN50 at 21 m the arterial
+nitrogen is already computed from FO2 0.50. Nothing was missing there.
+
+What was missing is the regime above 2.2 ata, where venous PO2 genuinely does
+track arterial. Implemented:
+
+    PvO2 = max( PvO2_resting, PAO2 − 72.4 fsw )
+
+Below 2.2 ata this returns the resting value exactly, so **no recreational or
+technical schedule moves** — verified: 132/20 holds 9 min, 150/20 holds 3+19,
+CCR 45 m/25 min holds 17 min, the 70 m trimix holds 84 min. It changes the model
+only at chamber and treatment depths, where it is now right instead of assuming
+a resting venous PO2 that no longer applies.
+
+So the intuition was sound and the physics is now complete, but the numbers say
+the effect at 1.6 ata is nil — and that is the useful result, because it rules
+out a whole line of enquiry rather than leaving it open.
+
+---
+
+# Cochran's helium architecture, from the owner's InDepth article
+
+Confirmed in the author's own words:
+
+> *"There were several versions of the Cochran algorithm: 14, 16, and 20
+> compartment models. In the case of the 20 compartment version, the algorithm
+> included **fast compartments to compensate for helium gas** and added a
+> **compensation for microbubbles related to ascent rate velocity**. The model
+> also used the **same linear off-gassing from the Thalmann algorithm**."*
+
+and on the Gemini, *"compartments between five and 480 minutes"* with *"added
+variables for ascent rate and breathing parameters."*
+
+That is a complete architectural specification for the trimix variant:
+
+1. EL-DCM linear off-gassing — **we have this**, corrected in 1.12.0.
+2. Fast compartments carrying helium — we have three invented fast compartments
+   that never control anything. They would need helium-appropriate MPTT0 values
+   to do the job described.
+3. Ascent-velocity microbubble compensation — **we have nothing like this.**
+   This is the term that produces a deep first stop, and its absence is why
+   VVAL-79 does not stop until 33 m where VPM-B stops at 54 m.
+4. Compartment range 5 to 480 min — our slowest is 240.
