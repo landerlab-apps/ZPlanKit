@@ -1643,6 +1643,35 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             out->bottom_density_gl = gas_density_gl(&t, dmax);
         }
     }
+
+    /* Gas density advisory, after Anthony and Mitchell.
+     *
+     * Density is p(ata) * M / 22.414 - the ideal gas at 0 C referenced to one
+     * atmosphere, which is the convention their limits were derived under. It
+     * reproduces their anchors: air at 30 m comes out 5.1 g/L and at 39 m
+     * 6.3 g/L, against the quoted 5.2 and 6.2.
+     *
+     * Above roughly 6.2 g/L the work of breathing and CO2 retention rise
+     * steeply, and CO2 retention is itself a risk factor for both oxygen
+     * toxicity and inert gas narcosis - which is why this is worth saying on
+     * the plan rather than leaving to the diver to look up. Advisory only: it
+     * changes no schedule, and it is a property of the gas, so it applies
+     * whichever model is in use. */
+    if (out->bottom_density_gl > 6.2) {
+        char m[192];
+        snprintf(m, sizeof m,
+                 "Bottom gas density %.1f g/L exceeds the 6.2 g/L limit "
+                 "(Anthony & Mitchell). Work of breathing and CO2 retention "
+                 "rise steeply above it. Add helium.", out->bottom_density_gl);
+        warn(s, m);
+    } else if (out->bottom_density_gl > 5.2) {
+        char m[192];
+        snprintf(m, sizeof m,
+                 "Bottom gas density %.1f g/L is above the 5.2 g/L ideal "
+                 "(Anthony & Mitchell), below the 6.2 g/L limit.",
+                 out->bottom_density_gl);
+        warn(s, m);
+    }
     out->runtime_min = s->runtime;
     out->cns_pct = s->cns;
     out->otu = s->otu;
