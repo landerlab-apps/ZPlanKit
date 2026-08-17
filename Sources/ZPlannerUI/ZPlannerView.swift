@@ -1,5 +1,5 @@
 //
-//  ZPlannerView.swift — v1.8.0
+//  ZPlannerView.swift — v1.9.0
 //
 //  Form-based planner front end. Monochrome, no graphics.
 //  Top bar: Config · Log · Calculate.
@@ -545,7 +545,14 @@ final class PlannerModel: ObservableObject {
             // dive on top of itself.
             let r = try ZPlan.plan(profile: profileText, tissueFile: baselineTissue)
             planText = r.reportText
-            notes = r.warnings
+            // NOT r.warnings. zp_report() already appends the engine's
+            // warnings to the end of the plan, so copying them here printed
+            // every one of them twice — once above the schedule and once
+            // inside it. The notes line is for the reasons there is NO plan:
+            // an unstated surface interval, no enabled levels, an engine
+            // refusal. Those all leave planText empty, so nothing else can
+            // carry them.
+            notes = ""
             resultTissue = r.tissueState.tissueFileText
             // Log at the moment of calculation. Logging used to happen when the
             // Log button was pressed, which saved whatever planText happened to
