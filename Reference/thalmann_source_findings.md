@@ -270,3 +270,62 @@ it.** It is not the gas-exchange parameters: the 20 fsw stop held at 19-20 min
 across a PBOVP sweep from 10 to 44 fsw. Remaining candidates are TTIS,
 SRF_CNTRLT_MODE, the first-stop routine FRSP7, and the metres-versus-fsw depth
 conversion. The error is conservative.
+
+---
+
+# Debug analysis of the first stop and the 150/20 residual
+
+Instrumented `ceiling_bar()` to print the controlling compartment, its tension,
+its MPTT0 and the ceiling once per minute through the ascent.
+
+## The 20 fsw stop is two stops in a trench coat
+
+    rt 30.7  10 fsw  ctrl#4  t1/2 10.0  tension 104.09  MPTT0 87.70  excess +16.4
+    rt 34.7  10 fsw  ctrl#4  t1/2 10.0  tension  97.91  MPTT0 87.70  excess +10.2
+    rt 38.7  10 fsw  ctrl#4  t1/2 10.0  tension  91.72  MPTT0 87.70  excess  +4.0
+    rt 39.7  10 fsw  ctrl#6  t1/2 40.0  tension  58.53  MPTT0 56.00  excess  +2.5
+    rt 44.7  10 fsw  ctrl#6  t1/2 40.0  tension  57.01  MPTT0 56.00  excess  +1.0
+    rt 48.7  10 fsw  ctrl#6  t1/2 40.0  tension  55.89  MPTT0 56.00  excess  -0.1
+
+**Phase 1, about 8 minutes** — the 10-minute compartment falling 104 to 87.7.
+It is in the LINEAR regime the whole way, moving at 1.55 fsw/min. Exponential
+at that tension would be 4.4 fsw/min, so linear costs roughly five minutes
+here. This is the residual, and it is a crossover-parameter question.
+
+**Phase 2, about 9 minutes** — the 40-minute compartment falling 58.53 to
+56.00 at 0.31 fsw/min, exponential throughout.
+
+Phase 2 alone is 9 minutes against a published total of 15.
+
+## Tested and eliminated
+
+| hypothesis | result |
+|---|---|
+| Compartment count 9 vs 12 | **identical** on both anchors — the three invented fast compartments never control here |
+| Uniform PBOVP | swept 8 to 44 fsw; the 20 fsw stop never drops below 19 |
+| Per-compartment crossovers (your Python's pattern, and czplan's original) | 30 fsw stop matches at 2.0 and NDL mean improves to **1.00 min**, the best yet — but 20 fsw goes to 20-21 and the manned anchor falls to 7 |
+| Ascent credit, i.e. FRSP7 crediting exchange during ascent | markedly better no-stop limits (60, 70, 80, 110, 120 fsw exact) but **no effect on stop times** — the credit is negligible over a 10 fsw hop |
+| LST_DOMode 0 | worth one minute |
+
+## Where that leaves it
+
+Phase 2 is a floor. The 40-minute compartment arrives at 20 fsw holding 58.53
+fsw against an MPTT0 of 56.00, and at 0.31 fsw/min that is nine minutes no
+matter what the crossover parameters do — none of them touch it, because it is
+in the exponential regime.
+
+So for the Navy model to produce 15 minutes total, it must **arrive at the last
+stop with less in the 40-minute compartment than we do**. That points upstream —
+to the bottom phase, the deeper stops, or the depth conversion — not to the last
+stop at all. MPTT0 = 56.0 for that compartment is the published value, so the
+tension is what differs.
+
+Nothing changed. v1.12.0 stands.
+
+**Worth noting for later:** the combination of per-compartment crossovers
+(`inf, 20, 15, 12, 10, inf, inf, inf, inf`) with ascent credit enabled gives the
+closest no-stop agreement this engine has achieved — mean error 1.00 min across
+30-190 fsw, with the 30 fsw deco stop matching the table exactly. It trades the
+manned-trial anchor to get there, so it is not obviously better overall, but it
+is the best-fitting parameterisation found and should be revisited once the
+upstream loading question is settled.
