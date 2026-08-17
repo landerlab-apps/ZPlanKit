@@ -126,3 +126,71 @@ gas-exchange machinery, not in the tissue table.** Correct sequence:
 4. Add the constant-PO2 arterial branch (item 4).
 5. Only then revisit tissue sets, and treat 20 compartments — not 12 — as the
    target architecture for helium.
+
+---
+
+# Both corrections implemented and measured — neither closes the gap
+
+Built on czplan v1.11.0 and measured against the two air anchors. Correct
+implementation of LST_DOMode 0 travels the last stop up to one increment,
+crediting gas exchange during that travel, then requires surfacing to be
+tolerated there. (My first attempt tested "ceiling <= one increment", which is
+far more lenient and gave 3 min against the manned trial's 9 — wrong reading.)
+
+| | 132/20 @ 20 fsw | 150/20 |
+|---|---|---|
+| target | **9** (NEDU manned) | **2 + 15 = 17** |
+| czplan v1.11.0 | 9 | 3 + 20 = 23 |
+| + LST_DOMode 0 | 9 | 3 + 19 = 22 |
+| + venous PVSAT | 11 | 4 + 20 = 24 |
+| + both | 11 | 4 + 19 = 23 |
+
+**LST_DOMode 0 is worth one minute, not five.** It holds the manned anchor, so
+it is safe, but it does not explain the 150/20 excess.
+
+**The venous PVSAT reference makes things worse, and breaks the manned anchor**
+(9 to 11). That is informative rather than disqualifying: PBOVP and the venous
+offset are coupled, and the crossover values in this engine were fitted with no
+venous term. Applying one without refitting the other is not a valid test of
+either. It should not ship in this state.
+
+So the hypothesis in the section above — that these two accounted for the
+residual — is **wrong**. Measured, not argued.
+
+## What is still unaccounted for
+
+150 fsw / 20 min remains 22-23 minutes against a published 17, and the excess
+is not in the last stop alone: our first stop is 30 fsw for 3 minutes where the
+table has 2. Remaining candidates, in the order I would test them:
+
+1. **TTIS.** Published Navy stop times include travel time to each stop except
+   the first. If this engine reports time *at* the stop, every tabulated
+   comparison is offset by roughly the inter-stop travel time — about 20 s per
+   10 fsw at 30 fpm, which over five stops is most of the discrepancy.
+2. **Round Time Up**, applied per stop, compounds with the above.
+3. **Depth conversion.** This engine works in metres with a bar-per-metre
+   constant; the tables are computed in fsw with 33 fsw = 1 atm exactly. A 0.5%
+   error in ambient pressure is small per step and cumulative over a schedule.
+4. **First stop selection** (FRSP7) and **SRF_CNTRLT_MODE**.
+
+Nothing further has been shipped. czplan remains at v1.11.0 with the linear
+rate fix only — that one is independently confirmed by vval18_planner.py and it
+resolved the reported pathology.
+
+---
+
+# Note on the other uploads
+
+- **NEDU TR 03-12** (a443070, Thalmann): the origin report for VVAL-18 on air —
+  risk analysis against the NMRI LE1 probabilistic model, concluding VVAL-18
+  gave risks not significantly higher, and mostly lower, than the standard air
+  tables. Context rather than parameters.
+- **VVAL 18 briefing slides**: the case for replacing the standard air tables —
+  DCS incidence by decompression stress, the 150 fsw risk comparison.
+- **RGBM** (Wienke, appendix): bubble-phase model with a phase-volume
+  constraint. Unrelated architecture; useful only as background.
+- **Probabilistic gas and bubble dynamics models**: scanned images with no OCR
+  layer, so not machine-readable here. Not read.
+- **MT92**: French professional tables, Comex lineage, helium-capable —
+  a possible outside sanity bound for a helium model, not a validation of one.
+- **NOAA Diving Manual**: oxygen exposure limits and general reference.
