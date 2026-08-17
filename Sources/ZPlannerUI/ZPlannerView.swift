@@ -140,9 +140,10 @@ public struct Manual {
 
     DECO GASES
     Click Yes and list the mixes, e.g. 50, 100. The planner picks the richest \
-    one allowed by Max PO2 and Max END. A GasSw row marks where the switch \
-    happens. Config can also hold you there for a few extra minutes — see \
-    Extended stops.
+    one allowed by Max PO2 and Max END. The new mix appears in the gas column \
+    of the stop where you change on to it. If the switch depth is not a stop, \
+    a GasSw row marks it instead. Config can also hold you there for a few \
+    extra minutes — see Extended stops.
 
     SETTINGS STRIP
     On a phone the settings sit in one strip of chips above the tabs. It folds \
