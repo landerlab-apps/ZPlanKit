@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.19.0"
+#define ZP_VERSION "1.20.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -475,6 +475,32 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
             s->pn2[i] += (pin2 - s->pn2[i]) * (1.0 - exp(-M_LN2 * dtn / N2_HT[i]));
             s->phe[i] += (pihe - s->phe[i]) * (1.0 - exp(-M_LN2 * dth / HE_HT[i]));
         }
+    }
+    /* Start of the decompression zone, for every model.
+     *
+     * This is the depth at which the leading compartment's total inert tension
+     * first reaches ambient pressure on the way up - the crossover from merely
+     * off-gassing into supersaturation, where a bubble can grow. Everything
+     * shallower than it is the decompression zone, so the first stop always
+     * lies ABOVE this depth. Reporting the first stop under this name, which
+     * is what the engine used to do, made the two identical and told the diver
+     * nothing.
+     *
+     * Note the criterion is tension >= ambient, not tension >= inspired inert
+     * pressure. Off-gassing in the plain sense begins almost the instant the
+     * diver leaves the bottom, since the inspired inert pressure falls with
+     * him; that depth is not useful and is not what anyone means by the deco
+     * zone. Baker's CALC_START_OF_DECO_ZONE uses ambient, and so does this.
+     * The constant for the metabolic gases is included, as he includes it.
+     *
+     * Recorded on the FIRST crossing only, and reset per pass by run_plan, so
+     * the critical volume loop cannot walk it shallower on later iterations. */
+    if (s->in_ascent && s->out && s->out->decozone_start_m <= 0) {
+        for (int i = 0; i < s->ncomp; i++)
+            if (s->pn2[i] + s->phe[i] + VPM_OTHER_GASES >= pa_now) {
+                s->out->decozone_start_m = depth_m;
+                break;
+            }
     }
     if (IS_VPM(s->cfg)) {
         vpm_crush(s, pa_now);
@@ -1351,6 +1377,11 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     /* Everything from here is the ascent, including deco. Consumption before
      * this point is bottom gas spent getting to and staying at depth. */
     s->in_ascent = true;
+    /* Re-measured on every pass. VPM-B's critical volume loop runs the ascent
+     * more than once and the tissues differ each time; leaving the first
+     * pass's value in place would report a zone start that belongs to a
+     * schedule the diver is not being given. */
+    if (s->out) s->out->decozone_start_m = 0;
 
     if (IS_VPM(cfg)) {
         /* Crushing pressure has been accumulating all the way down and along
@@ -1588,8 +1619,10 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             out->total_deco_min += (want - total);
         }
         if (stop_time > 1e-9 && first_norm < 0) first_norm = here;
-        if (stop_time > 1e-9 && out->decozone_start_m <= 0)
-            out->decozone_start_m = here;
+        /* decozone_start_m used to be assigned here, from the first stop that
+         * carried any time - so the report's "Deco zone start" was just the
+         * first stop under another name. It is now measured in tick(), where
+         * the tension actually crosses ambient. See the note there. */
         int norm_idx = -1;
         if (stop_time > 1e-9 && out->n_lines < ZP_MAX_PLAN_LINES) {
             norm_idx = out->n_lines;
