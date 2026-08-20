@@ -1,0 +1,62 @@
+Lplanner
+Copyright (C) 2026 Carlos Lander <scubalander@gmail.com>
+
+LICENCE
+
+Lplanner and the ZPlanKit decompression engine are free software, licensed
+under the GNU General Public License, version 3. The full text is in LICENSE.
+
+You may use, study, modify and redistribute this software under those terms.
+If you distribute a modified version, it must also be GPL-3.0 and its source
+must be available. That condition is deliberate: a diver has to be able to
+read the model that produced the schedule he is about to breathe.
+
+  Engine and Apple apps   https://github.com/landerlab-apps/ZPlanKit
+  Android app             https://github.com/landerlab-apps/Android-Lplanner
+  Documentation           https://github.com/landerlab-apps/lplanner
+
+The Android application is sold on Google Play and given away on F-Droid.
+Selling GPL software is permitted; the Play price exists to offset the
+developer account fee, not to restrict anyone. The F-Droid build and the
+source are free of charge, and a diver who would rather compile it himself is
+welcome to.
+
+NO WARRANTY
+
+THIS SOFTWARE AND THE DECOMPRESSION SCHEDULES IT PRODUCES ARE PROVIDED "AS IS",
+WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES,
+INJURY OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE, ITS USE, OR ANY DIVE
+CONDUCTED IN RELIANCE ON IT.
+
+Decompression is not a solved problem, and no model predicts it reliably for
+every diver on every day. This software is experimental. It probably contains
+errors. The author does not warrant that it accurately implements the
+algorithms it names. Anyone diving a schedule produced by this software does so
+entirely at their own risk and remains responsible for verifying it against
+tables or planning software they trust.
+
+ATTRIBUTION
+
+The decompression models implemented in Lplanner are the published work of
+others. Nothing in this notice claims any right in them:
+
+  ZHL-16B and ZHL-16C   A. A. Buhlmann, Decompression - Decompression Sickness
+  VVAL-18 / EL-DCM      E. D. Thalmann, U.S. Navy exponential-linear model
+  VPM / VPM-B           D. E. Yount and D. C. Hoffman, varying permeability
+                        model; implementation by E. C. Baker, released to the
+                        diving community to be distributed freely with credit
+                        to the authors
+  Deep stops            R. Pyle, the mean-depth rule
+  Gradient factors      E. Baker
+  M-values              R. D. Workman
+
+Implementations consulted while verifying this one, neither of which
+contributed code to it:
+
+  Subsurface   https://github.com/subsurface/subsurface        GPL-2.0
+  Abysner      https://github.com/NeoTech-Software/Abysner     AGPL-3.0
+
+Inspired by William M. Smithers' Z(ach)plan.

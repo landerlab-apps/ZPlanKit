@@ -1,4 +1,32 @@
-/* czplan.c — see czplan.h for the warning you must read. */
+/* czplan.c — the Lplanner decompression engine.
+ * See czplan.h for the warning you must read before using any of this.
+ *
+ * Copyright (C) 2026 Carlos Lander <scubalander@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details. That disclaimer is not a formality here: this software
+ * computes decompression schedules, and a wrong schedule can injure or kill
+ * the diver who follows it.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <https://www.gnu.org/licenses/>.
+ *
+ * The VPM-B implementation follows the Varying Permeability Model of D. E.
+ * Yount and D. C. Hoffman, in the form Erik C. Baker released to the diving
+ * community with the request that it be distributed freely and the authors
+ * credited. This is an independent port; any error in it is mine, not theirs.
+ *
+ * The VVAL-18 implementation follows the U.S. Navy Thalmann EL-DCM as
+ * published. The helium handling is an unvalidated extrapolation of my own -
+ * the Navy publishes no helium parameters for that model.
+ */
 
 #include "include/czplan.h"
 #include <math.h>

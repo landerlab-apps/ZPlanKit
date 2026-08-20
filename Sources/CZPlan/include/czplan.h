@@ -13,6 +13,16 @@
  * verifying it against trusted tables/software, and never use it
  * without formal mixed-gas decompression training.
  * =================================================================
+ *
+ * Copyright (C) 2026 Carlos Lander <scubalander@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version. It is distributed WITHOUT ANY WARRANTY - see the licence
+ * for details, and see the warning above for why that matters more here than
+ * it does in most software. A copy of the licence ships in LICENSE; if it is
+ * missing, see <https://www.gnu.org/licenses/>.
  */
 
 #ifndef CZPLAN_H
