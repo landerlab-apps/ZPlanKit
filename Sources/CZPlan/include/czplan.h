@@ -91,19 +91,27 @@ typedef struct {
     bool   extra_slow;         /* experimental: hold while offgas gradient > 1.25 bar */
     bool   ndl_gf_low;         /* NDL check uses GF-low (default: GF-high) */
     double altitude_m;
-    /* Acclimatisation to altitude. A diver who has lived at the dive site's
-     * altitude long enough has tissues equilibrated to the thinner air. One
-     * who drove up this morning is still carrying his sea-level nitrogen, and
-     * on a 30 m dive at 3000 m that is the difference between 8.6 and 18.6
-     * minutes of decompression - so the assumption cannot be silent.
+    /* EQUILIBRATION at altitude - not acclimatisation. The U.S. Navy Diving
+     * Manual (rev 7, 9-13.4) separates the two, and the distinction matters
+     * here: equilibration is the body off-gassing its excess nitrogen to match
+     * the thinner air, and takes about twelve hours; acclimatization is the
+     * much slower adjustment to the lower oxygen partial pressure. This engine
+     * models the first and nothing whatsoever of the second.
      *
-     *   altitude_acclimatised  true  = fully equilibrated at altitude
+     * A diver who drove up this morning is still carrying his sea-level
+     * nitrogen. On a 30 m dive at 3000 m that is the difference between 8.6
+     * and 18.6 minutes of decompression, so the assumption cannot be silent.
+     * The Navy handles the same fact by treating the ascent to altitude as a
+     * repetitive dive (their Table 9-5); the per-compartment washout below is
+     * the continuous form of that idea.
+     *
+     *   altitude_equilibrated  true  = fully equilibrated at altitude
      *                          false = use hours_at_altitude (DEFAULT)
      *   hours_at_altitude      0     = arrived just now, sea-level tissues
      *                          n     = washed out for n hours since arriving
      *
      * Both are ignored when altitude_m is 0, where they cannot differ. */
-    bool   altitude_acclimatised;
+    bool   altitude_equilibrated;
     double hours_at_altitude;
     double conservatism_pct;   /* 0-100 */
     double stop_distance_m;

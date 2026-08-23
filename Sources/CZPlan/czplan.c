@@ -1268,7 +1268,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
      *
      * Two reference loadings now:
      *
-     *   pn2_alt   equilibrated at the dive site - the acclimatised diver
+     *   pn2_alt   equilibrated at the dive site - the resident diver
      *   pn2_sea   equilibrated at sea level     - carried up the mountain
      *
      * and the diver sits somewhere between them depending on how long he has
@@ -1294,7 +1294,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         double start;
         if (cfg->have_initial_tissues) {
             start = cfg->init_pn2[i];               /* repetitive dive wins */
-        } else if (cfg->altitude_acclimatised || cfg->altitude_m <= 1e-9) {
+        } else if (cfg->altitude_equilibrated || cfg->altitude_m <= 1e-9) {
             start = pn2_alt;
         } else {
             double hrs = cfg->hours_at_altitude > 0 ? cfg->hours_at_altitude : 0.0;
@@ -1374,9 +1374,9 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             double w = s->ncomp > 1 ? (double)i / (s->ncomp - 1) : 1.0;
             /* Scaled from the dive site's own saturation value, so the same
              * Conservatism percentage means the same proportional preload
-             * whatever the altitude. pn2_alt, not the acclimatisation-adjusted
+             * whatever the altitude. pn2_alt, not the equilibration-adjusted
              * starting tension - the two are the same thing at sea level, and
-             * at altitude this keeps Conservatism and acclimatisation as
+             * at altitude this keeps Conservatism and equilibration as
              * independent controls rather than compounding one another. */
             double extra = pn2_alt * c * w;
             s->pn2[i] += extra * fn2;
@@ -1953,11 +1953,11 @@ void zp_config_init(zp_config *cfg) {
     cfg->metric_output = false;
     cfg->salt_water = true;
     cfg->use_b_values = false;
-    /* Not acclimatised, arrived just now. The conservative end, chosen as the
+    /* Not equilibrated, arrived just now. The conservative end, chosen as the
      * default because it is the common case - the diver who drives up to the
      * lake in the morning - and because the other end understates the
      * decompression rather than overstating it. No effect at sea level. */
-    cfg->altitude_acclimatised = false;
+    cfg->altitude_equilibrated = false;
     cfg->hours_at_altitude = 0.0;
     cfg->conservatism_pct = 0;
     cfg->stop_distance_m = 3.048;   /* 10 ft */
@@ -2024,8 +2024,8 @@ int zp_parse_profile(const char *text, zp_config *cfg,
             else if (!strcmp(key, "usebvalues")) { /* v1.5: ZHL-16C only */ }
             else if (!strcmp(key, "debuglevel")) { /* ignored */ }
             else if (!strcmp(key, "altitude")) cfg->altitude_m = atof(val) * d2m;
-            else if (!strcmp(key, "altitudeacclim"))
-                cfg->altitude_acclimatised = truthy(val);
+            else if (!strcmp(key, "altitudeequil"))
+                cfg->altitude_equilibrated = truthy(val);
             else if (!strcmp(key, "hoursataltitude")) {
                 double v = atof(val);
                 cfg->hours_at_altitude = v > 0 ? v : 0.0;
@@ -2226,13 +2226,13 @@ int zp_report(const zp_config *cfg, const zp_result *res,
             (cfg->gf_hi > 0 ? cfg->gf_hi : 0.85) * 100.0);
     else
         APP("                  Buhlmann ZHL-16C\n\n");
-    /* Altitude changes the schedule and the acclimatisation assumption changes
+    /* Altitude changes the schedule and the equilibration assumption changes
      * it again, by more than most Config settings do - at 3000 m it can double
      * the obligation. Neither was stated anywhere on the plan, so a diver
      * could not tell which of two very different schedules he was holding. */
     if (cfg->altitude_m > 1e-9) {
-        if (cfg->altitude_acclimatised)
-            APP("        Altitude %.0f%s, diver acclimatised\n\n",
+        if (cfg->altitude_equilibrated)
+            APP("        Altitude %.0f%s, diver equilibrated\n\n",
                 cfg->altitude_m * dscale, du);
         else if (cfg->hours_at_altitude > 0)
             APP("        Altitude %.0f%s, %.0f h at altitude\n\n",
