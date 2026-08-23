@@ -8,9 +8,9 @@
 > use it at your own risk.
 
 
-A clean-room reimplementation of **ZPlan v1.03** (© 1997–98 William M. Smithers) —
-the classic Bühlmann ZHL-16 mixed-gas decompression planner — as a portable
-C99 engine with a Swift API, building natively for **macOS** and **iOS**
+Inspired by **ZPlan v1.03** (© 1997–98 William M. Smithers) — the classic
+Bühlmann ZHL-16 mixed-gas decompression planner — this is a portable C99
+engine with a Swift API, building natively for **macOS** and **iOS**
 (and Linux/Windows, since the core is plain C).
 
 ```
@@ -42,9 +42,7 @@ This is not a port of decompiled code. The engine was written from:
 
 1. the **published Bühlmann ZHL-16 model** (17 compartments including 1b,
    ZHL-16B and ZHL-16C a/b sets, partial-pressure weighted for He/N₂ mixes);
-2. ZPlan's own documentation (`Readme.txt`, the annotated `profile.dat`);
-3. the original **`O2.cfg`** NOAA CNS% / REPEX OTU table, embedded verbatim;
-4. **differential testing against the original `Zplan.exe` binary**, run
+2. **differential testing against the original `Zplan.exe` binary**, run
    under Wine as a black-box oracle across dozens of profiles.
 
 The Bühlmann coefficients were additionally **cross-verified against
@@ -106,8 +104,6 @@ slightly higher = slightly more conservative).
 * **Time to fly** is advisory. Small tissue differences swing it by hours
   near the threshold (repetitive test: 9.5 h vs 5.0 h). The original's own
   Readme (§13) recommends simply waiting 24 h — so does this one.
-* **WKPP deep-stop mode ('w')** is approximated (Pyle mean-depth placement,
-  1:00 stops). The true WKPP algorithm was never published in full.
 * **Scamahorn Slide** is parsed but planned at the fixed setpoint (a
   warning is emitted). Closed-circuit constant-setpoint planning works.
 * CNS above PO₂ ≈ 1.6 interpolates the table's steep knee slightly more
@@ -131,7 +127,7 @@ slightly higher = slightly more conservative).
 * Deco gas auto-selection on stop arrival: highest PO₂ ≤ max (with the
   original's "few inches" rounding grace) and END ≤ max. Deco RMV engages
   on arrival at the first stop.
-* O₂ tracking: the original `O2.cfg` (NOAA CNS%, REPEX OTU) embedded,
+* O₂ tracking: the published NOAA CNS% and REPEX OTU tables, built in,
   linear interpolation, defined in ATM.
 
 ---
@@ -205,8 +201,8 @@ classic staircase of short deep stops growing toward the surface.
 
 ## The ZPlanner-style UI (new in v1.1.0)
 
-`Sources/ZPlannerUI/ZPlannerView.swift` recreates the original ZPlanner
-Delphi form in SwiftUI for macOS and iOS: the same radio groups
+`Sources/ZPlannerUI/ZPlannerView.swift`, inspired by the original ZPlanner
+Delphi form, in SwiftUI for macOS and iOS: the same radio groups
 (units / water / ZHL-16 b-c / deep stops), settings group boxes, the
 depth-time-mix levels grid, deco-gas list, a green **Calculate** button,
 and the plan in a monospaced memo — plus a depth-profile sketch (blue
@@ -456,9 +452,9 @@ Copyleft is the deliberate choice here rather than a permissive licence. A
 diver ought to be able to read the model that produced the schedule he is
 about to breathe, and GPL keeps that true of anything built from this.
 
-Clean-room reimplementation; no code was decompiled or copied from the
-original binaries. Original ZPlan concept and file formats by
-William M. Smithers (1997–98). Bühlmann ZHL-16 per A. A. Bühlmann,
+Written from published sources. No code was decompiled or copied from any
+original binary. Inspired by ZPlan; the concept and file formats are
+William M. Smithers' (1997–98). Bühlmann ZHL-16 per A. A. Bühlmann,
 *Tauchmedizin* (1995); CNS table per NOAA; OTU per R. W. Hamilton's REPEX.
 VPM-B per D. E. Yount and D. C. Hoffman, in the implementation E. C. Baker
 released to the diving community to be distributed freely with credit to the
