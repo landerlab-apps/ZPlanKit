@@ -102,8 +102,9 @@ slightly higher = slightly more conservative).
   documents. The original binary appears not to add the carried CNS into
   the displayed total; ZPlanKit does.
 * **Time to fly** is advisory. Small tissue differences swing it by hours
-  near the threshold (repetitive test: 9.5 h vs 5.0 h). The original's own
-  Readme (§13) recommends simply waiting 24 h — so does this one.
+  near the threshold (repetitive test: 9.5 h vs 5.0 h). For any decompression
+  dive, DAN's guidance is to wait 24 hours before flying — take that over the
+  computed figure.
 * **Scamahorn Slide** is parsed but planned at the fixed setpoint (a
   warning is emitted). Closed-circuit constant-setpoint planning works.
 * CNS above PO₂ ≈ 1.6 interpolates the table's steep knee slightly more
