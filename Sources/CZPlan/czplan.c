@@ -38,7 +38,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.20.0"
+#define ZP_VERSION "1.21.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -1257,12 +1257,51 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         VPM.max_amb = 0.0;
     }
 
-    /* initial tissues */
-    double pn2_sat = alveolar(s->p_surface) * 0.79;
-    if (IS_VVAL(cfg)) pn2_sat = (s->p_surface - VVAL_H2O_BAR) * 0.79;
-    if (IS_VPM(cfg))  pn2_sat = (s->p_surface - VPM_WV_BAR) * 0.79;
+    /* Initial tissues.
+     *
+     * The engine used to start every dive with the tissues equilibrated at the
+     * dive site's own pressure, which quietly assumed the diver had been
+     * living at that altitude. For a mountain lake that is the least
+     * conservative assumption available, and it was never stated: at 3000 m a
+     * 30 m / 25 min dive came out at 8.6 minutes of decompression when a diver
+     * who had driven up that morning needed 18.6.
+     *
+     * Two reference loadings now:
+     *
+     *   pn2_alt   equilibrated at the dive site - the acclimatised diver
+     *   pn2_sea   equilibrated at sea level     - carried up the mountain
+     *
+     * and the diver sits somewhere between them depending on how long he has
+     * been up there. The washout is per-compartment Haldane, which is what
+     * makes "twelve hours" mean something useful rather than a guess: the fast
+     * tissues clear in an afternoon while the 635-minute compartment is barely
+     * half way there after half a day.
+     *
+     * At sea level both references are identical and none of this applies. */
+    double pn2_alt = alveolar(s->p_surface) * 0.79;
+    double pn2_sea = alveolar(P_SEALEVEL)   * 0.79;
+    if (IS_VVAL(cfg)) {
+        pn2_alt = (s->p_surface - VVAL_H2O_BAR) * 0.79;
+        pn2_sea = (P_SEALEVEL   - VVAL_H2O_BAR) * 0.79;
+    }
+    if (IS_VPM(cfg)) {
+        pn2_alt = (s->p_surface - VPM_WV_BAR) * 0.79;
+        pn2_sea = (P_SEALEVEL   - VPM_WV_BAR) * 0.79;
+    }
+    const double *ht_n2 = IS_VVAL(cfg) ? VVAL_HT_N2 : N2_HT;
+    int ht_n = IS_VVAL(cfg) ? VVAL_NC : ZP_COMPARTMENTS;
     for (int i = 0; i < ZP_COMPARTMENTS; i++) {
-        s->pn2[i] = cfg->have_initial_tissues ? cfg->init_pn2[i] : pn2_sat;
+        double start;
+        if (cfg->have_initial_tissues) {
+            start = cfg->init_pn2[i];               /* repetitive dive wins */
+        } else if (cfg->altitude_acclimatised || cfg->altitude_m <= 1e-9) {
+            start = pn2_alt;
+        } else {
+            double hrs = cfg->hours_at_altitude > 0 ? cfg->hours_at_altitude : 0.0;
+            double ht  = ht_n2[i < ht_n ? i : ht_n - 1];
+            start = pn2_alt + (pn2_sea - pn2_alt) * exp(-M_LN2 * hrs * 60.0 / ht);
+        }
+        s->pn2[i] = start;
         s->phe[i] = cfg->have_initial_tissues ? cfg->init_phe[i] : 0.0;
     }
     s->cns = cfg->have_initial_tissues ? cfg->init_cns_pct : 0.0;
@@ -1306,7 +1345,10 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         for (int i = 0; i < s->ncomp; i++) {
             double htn = IS_VVAL(cfg) ? VVAL_HT_N2[i] : N2_HT[i];
             double hth = IS_VVAL(cfg) ? VVAL_HT_N2[i]/VVAL_HE_RATIO : HE_HT[i];
-            s->pn2[i] = pn2_sat + (s->pn2[i]-pn2_sat)*exp(-M_LN2*t/htn);
+            /* Decays toward the DIVE SITE's equilibrium, not sea level's: the
+             * surface interval is spent at altitude, breathing the thin air
+             * there. pn2_alt, not pn2_sea. */
+            s->pn2[i] = pn2_alt + (s->pn2[i]-pn2_alt)*exp(-M_LN2*t/htn);
             s->phe[i] = s->phe[i]*exp(-M_LN2*t/hth);
         }
         s->cns *= exp(-M_LN2 * t / 90.0);   /* 90-min O2 half-time */
@@ -1330,7 +1372,13 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             }
         for (int i = 0; i < s->ncomp; i++) {
             double w = s->ncomp > 1 ? (double)i / (s->ncomp - 1) : 1.0;
-            double extra = pn2_sat * c * w;
+            /* Scaled from the dive site's own saturation value, so the same
+             * Conservatism percentage means the same proportional preload
+             * whatever the altitude. pn2_alt, not the acclimatisation-adjusted
+             * starting tension - the two are the same thing at sea level, and
+             * at altitude this keeps Conservatism and acclimatisation as
+             * independent controls rather than compounding one another. */
+            double extra = pn2_alt * c * w;
             s->pn2[i] += extra * fn2;
             s->phe[i] += extra * fhe;
         }
@@ -1905,6 +1953,12 @@ void zp_config_init(zp_config *cfg) {
     cfg->metric_output = false;
     cfg->salt_water = true;
     cfg->use_b_values = false;
+    /* Not acclimatised, arrived just now. The conservative end, chosen as the
+     * default because it is the common case - the diver who drives up to the
+     * lake in the morning - and because the other end understates the
+     * decompression rather than overstating it. No effect at sea level. */
+    cfg->altitude_acclimatised = false;
+    cfg->hours_at_altitude = 0.0;
     cfg->conservatism_pct = 0;
     cfg->stop_distance_m = 3.048;   /* 10 ft */
     cfg->last_stop_depth_m = 3.048;
@@ -1970,6 +2024,12 @@ int zp_parse_profile(const char *text, zp_config *cfg,
             else if (!strcmp(key, "usebvalues")) { /* v1.5: ZHL-16C only */ }
             else if (!strcmp(key, "debuglevel")) { /* ignored */ }
             else if (!strcmp(key, "altitude")) cfg->altitude_m = atof(val) * d2m;
+            else if (!strcmp(key, "altitudeacclim"))
+                cfg->altitude_acclimatised = truthy(val);
+            else if (!strcmp(key, "hoursataltitude")) {
+                double v = atof(val);
+                cfg->hours_at_altitude = v > 0 ? v : 0.0;
+            }
             else if (!strcmp(key, "conservatism")) {
                 cfg->conservatism_pct = atof(val);
                 if (cfg->conservatism_pct > 50) cfg->conservatism_pct = 50;
@@ -2166,6 +2226,21 @@ int zp_report(const zp_config *cfg, const zp_result *res,
             (cfg->gf_hi > 0 ? cfg->gf_hi : 0.85) * 100.0);
     else
         APP("                  Buhlmann ZHL-16C\n\n");
+    /* Altitude changes the schedule and the acclimatisation assumption changes
+     * it again, by more than most Config settings do - at 3000 m it can double
+     * the obligation. Neither was stated anywhere on the plan, so a diver
+     * could not tell which of two very different schedules he was holding. */
+    if (cfg->altitude_m > 1e-9) {
+        if (cfg->altitude_acclimatised)
+            APP("        Altitude %.0f%s, diver acclimatised\n\n",
+                cfg->altitude_m * dscale, du);
+        else if (cfg->hours_at_altitude > 0)
+            APP("        Altitude %.0f%s, %.0f h at altitude\n\n",
+                cfg->altitude_m * dscale, du, cfg->hours_at_altitude);
+        else
+            APP("        Altitude %.0f%s, diver just arrived\n\n",
+                cfg->altitude_m * dscale, du);
+    }
     APP("                        DIVE PLAN\n\n");
     /* Columns: symbol · depth · stop · run · gas.
      *   \u2193 descent   \u2191 ascent   \u2014 stop   DStop deep stop

@@ -91,6 +91,20 @@ typedef struct {
     bool   extra_slow;         /* experimental: hold while offgas gradient > 1.25 bar */
     bool   ndl_gf_low;         /* NDL check uses GF-low (default: GF-high) */
     double altitude_m;
+    /* Acclimatisation to altitude. A diver who has lived at the dive site's
+     * altitude long enough has tissues equilibrated to the thinner air. One
+     * who drove up this morning is still carrying his sea-level nitrogen, and
+     * on a 30 m dive at 3000 m that is the difference between 8.6 and 18.6
+     * minutes of decompression - so the assumption cannot be silent.
+     *
+     *   altitude_acclimatised  true  = fully equilibrated at altitude
+     *                          false = use hours_at_altitude (DEFAULT)
+     *   hours_at_altitude      0     = arrived just now, sea-level tissues
+     *                          n     = washed out for n hours since arriving
+     *
+     * Both are ignored when altitude_m is 0, where they cannot differ. */
+    bool   altitude_acclimatised;
+    double hours_at_altitude;
     double conservatism_pct;   /* 0-100 */
     double stop_distance_m;
     double last_stop_depth_m;

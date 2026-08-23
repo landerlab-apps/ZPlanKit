@@ -173,6 +173,38 @@ public struct Manual {
 
     SHARE AND PRINT
     Both become available once a plan has been calculated.
+
+    DAN RECOMMENDATIONS
+    Divers Alert Network guidance, which sits outside any decompression \
+    model and is not enforced by this planner.
+
+    Flying after diving. The Time to Fly figure on the plan is the model's \
+    own arithmetic — the hours until your tissues tolerate a 10,000 ft \
+    cabin. It is not DAN's advice and is usually far shorter. DAN \
+    recommends a minimum 12-hour surface interval before flying after a \
+    single no-decompression dive, 18 hours after multiple dives or several \
+    days of diving, and considerably longer after any dive requiring \
+    decompression stops — commonly given as at least 24 hours. Take the \
+    longer figure.
+
+    Altitude after diving. Driving over a mountain pass is the same problem \
+    as flying and is easier to overlook. Apply the same intervals.
+
+    Diving at altitude. Arriving and diving the same day means your tissues \
+    still hold sea-level nitrogen, which is why Config asks whether you are \
+    acclimatised. DAN's guidance is to allow time at altitude before diving \
+    where you can.
+
+    Hydration, exertion and thermal stress all affect decompression and \
+    none are modelled here. Cold on the deep portion followed by warm \
+    shallow stops is the worst combination for gas elimination.
+
+    Ascent rate. Keep to the rate you planned. DAN and every training \
+    agency give 9–10 m/min as the maximum for the shallow portion.
+
+    If you feel unwell after a dive, breathe oxygen and call the DAN \
+    emergency line for your region. Symptoms that appear hours later are \
+    still decompression illness.
     """
 }
 
@@ -218,6 +250,7 @@ struct PlannerState: Codable {
     var useGF = false, gfLow = "30", gfHigh = "85", altGfLow = "90", altGfHigh = "90"
     var extraSlow = false, ndlLow = false
     var altitude = "0", conservatism = 10.0
+    var altitudeAcclimatised = false, hoursAtAltitude = "0"
     var deepStops = "p", pyleTime = 1, stopDistance = "3", lastStop = "3"
     var descentRates = "0-100, 15"
     var ascentRates = "70-30, 18\n30-12, 9\n12-0, 3"
@@ -295,6 +328,10 @@ final class PlannerModel: ObservableObject {
     @Published var extraSlow = false
     @Published var ndlLow = false
     @Published var altitude = "0"
+    /// Above sea level only. False plus hoursAtAltitude 0 is the diver who
+    /// drove up this morning - the conservative default, and the common case.
+    @Published var altitudeAcclimatised = false
+    @Published var hoursAtAltitude = "0"
     @Published var conservatism = 10.0          // 0-100 %
     @Published var deepStops = "p"              // n / p
     @Published var pyleTime = 1                 // 1-5 min
@@ -358,6 +395,8 @@ final class PlannerModel: ObservableObject {
         altGfLow = s.altGfLow; altGfHigh = s.altGfHigh
         extraSlow = s.extraSlow; ndlLow = s.ndlLow
         altitude = s.altitude; conservatism = s.conservatism
+        altitudeAcclimatised = s.altitudeAcclimatised
+        hoursAtAltitude = s.hoursAtAltitude
         deepStops = s.deepStops; pyleTime = s.pyleTime
         stopDistance = s.stopDistance; lastStop = s.lastStop
         descentRates = s.descentRates; ascentRates = s.ascentRates
@@ -383,6 +422,8 @@ final class PlannerModel: ObservableObject {
         s.altGfLow = altGfLow; s.altGfHigh = altGfHigh
         s.extraSlow = extraSlow; s.ndlLow = ndlLow
         s.altitude = altitude; s.conservatism = conservatism
+        s.altitudeAcclimatised = altitudeAcclimatised
+        s.hoursAtAltitude = hoursAtAltitude
         s.deepStops = deepStops; s.pyleTime = pyleTime
         s.stopDistance = stopDistance; s.lastStop = lastStop
         s.descentRates = descentRates; s.ascentRates = ascentRates
@@ -443,6 +484,8 @@ final class PlannerModel: ObservableObject {
         SaltWater: \(saltWater ? "y" : "n")
         Model: \(model == "vval" ? "vval18" : model == "vpm" ? "vpm" : "zhl16c")
         Altitude: \(altitude)
+        AltitudeAcclim: \(altitudeAcclimatised ? "y" : "n")
+        HoursAtAltitude: \(hoursAtAltitude)
         Conservatism: \(Int(conservatism))
         Precision: 1
         StopDistance: \(stopDistance)
@@ -1095,8 +1138,21 @@ struct ConfigSheet: View {
                         }
                     }
                     group("Conditions",
-                          help: "Altitude of the dive site (0 for sea level; be extra conservative if you are still off-gassing from travel to altitude). Conservatism applies only when gradient factors are switched off. It (0–50 %) preloads the tissue compartments with additional inert gas — nitrogen, and helium in proportion when the profile uses trimix — weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.") {
+                          help: "Altitude of the dive site, 0 for sea level. Above sea level the air is thinner, so the same dive carries more decompression. Acclimatised means you have been living at this altitude long enough for your tissues to have equilibrated to it. If you drove up this morning you are still carrying your sea-level nitrogen and need considerably more decompression — at 3000 m that can double the obligation, so state it honestly. Hours at altitude covers the middle: the tissues wash out towards equilibrium at their own rates. Conservatism applies only to ZHL16-C with gradient factors switched off. It (0–50 %) preloads the tissue compartments with additional inert gas — nitrogen, and helium in proportion when the profile uses trimix — weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.") {
                         row2("Altitude", $m.altitude)
+                        // Only shown above sea level, where the two references
+                        // differ. At 0 m acclimatised and just-arrived are the
+                        // same tissue loading and the control would be noise.
+                        if (Double(m.altitude) ?? 0) > 0 {
+                            Toggle("Diver acclimatised to this altitude",
+                                   isOn: $m.altitudeAcclimatised)
+                            if !m.altitudeAcclimatised {
+                                row2("Hours at altitude", $m.hoursAtAltitude)
+                                Text("0 = arrived just now, carrying sea-level nitrogen.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                         VStack(alignment: .leading, spacing: 4) {
                             Text(m.model == "vpm"
                                    ? "Conservatism — VPM-B uses its own, above"
