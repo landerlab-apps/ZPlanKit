@@ -447,7 +447,19 @@ independently of depth units.
   (see tables above); coefficients cross-checked against Subsurface.
 
 ## License / provenance
+
+Copyright (C) 2026 Carlos Lander. Free software under the **GNU General Public
+License, version 3** — see [LICENSE](LICENSE), and [NOTICE](NOTICE) for the
+full attribution and the warranty disclaimer.
+
+Copyleft is the deliberate choice here rather than a permissive licence. A
+diver ought to be able to read the model that produced the schedule he is
+about to breathe, and GPL keeps that true of anything built from this.
+
 Clean-room reimplementation; no code was decompiled or copied from the
 original binaries. Original ZPlan concept and file formats by
 William M. Smithers (1997–98). Bühlmann ZHL-16 per A. A. Bühlmann,
 *Tauchmedizin* (1995); CNS table per NOAA; OTU per R. W. Hamilton's REPEX.
+VPM-B per D. E. Yount and D. C. Hoffman, in the implementation E. C. Baker
+released to the diving community to be distributed freely with credit to the
+authors. M-values per R. D. Workman.

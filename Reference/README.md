@@ -79,10 +79,9 @@ rule to diverge from the instantaneous ceiling.
 
 ## Provenance of the VVAL parameters, and a document that is wrong
 
-The engine's VVAL parameters come from the owner's `parameters.py`
-(`/Volumes/KingstonData/DiveProfileAnalyzerVVALV0/parameters.txt`), which
-reverse-engineers the **Cochran Navy NSW III** implementation. Its structure is
-deliberate:
+The engine's VVAL parameters come from the author's own `parameters.py`, from
+an earlier dive profile analyser, which reverse-engineers the **Cochran Navy
+NSW III** implementation. Its structure is deliberate:
 
 * Twelve compartments, because the Cochran uses twelve tissues — evidenced by
   its `TWELVETISSUES` protocol command, the C0Form-C10Form dialogs, and the
