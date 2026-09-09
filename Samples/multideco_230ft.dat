@@ -1,0 +1,33 @@
+# Cross-check profile: MultiDeco reference dive, imperial throughout.
+#
+# MultiDeco settings this mirrors (ZHL-C+GF, OC):
+#   GF 45/85, salt, O2 narcotic on, depth in feet, gas in cu.ft
+#   stop size 10 ft, last OC stop 10 ft, minimum stop 1 min
+#   descent 65 fpm; ascent 55 fpm; deco (between stops) 30 fpm; surface 15 fpm
+#   bottom SAC 0.64, deco SAC 0.56; elevation 0
+#   deco mixes enabled: EAN50 and O2
+#
+# NOTE ON BOTTOM TIME: MultiDeco's level time is total run time at the point of
+# leaving the bottom (its table shows stop 26 / run 30 for a "230, 30" level),
+# whereas a ZPlan waypoint time is time spent AT depth after the travel there.
+# 26 min here is therefore the same dive as MultiDeco's "230, 30".
+UseMetric: n
+SaltWater: y
+Model: zhl16c
+GradientFactors: 45, 85
+OxyNarc: y
+Altitude: 0
+StopDistance: 10
+LastStopDepth: 10
+DeepStops: n
+Rmv: 0.64
+DecoRmv: 0.56
+MaxEND: 400
+DescentRate: 0-330, 65
+AscentRate: 230-120, 55
+AscentRate: 120-10, 30
+AscentRate: 10-0, 15
+UseOCDeco: y
+OcDecoGas: 50, 100
+OcDecoMaxPO2: 1.6
+230, 26, 18/45

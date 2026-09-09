@@ -38,7 +38,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.21.0"
+#define ZP_VERSION "1.23.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -223,12 +223,6 @@ static void vval_pcross_env(void) {
     char *tok = strtok(buf, ","); int i = 0;
     while (tok && i < VVAL_NC) { VVAL_PCROSS_FSW[i++] = atof(tok); tok = strtok(NULL, ","); }
 }
-#define EXTRA_SLOW_GRADIENT_BAR    1.25
-/* Safety bound per ascent segment. Restored to 5 minutes in v1.8.0 to match the
- * documented behaviour ("adds at most 5 minutes per stop"); it had been raised
- * to 15 to paper over the broken gradient criterion, which is now fixed at
- * source in offgas_gradient_at(). */
-#define EXTRA_SLOW_MAX_DELAY_MIN   5.0
 #define VVAL_HE_RATIO 2.6457513110645906   /* sqrt(28/4) */
 
 /* ------------------------------------------------------------------ */
@@ -310,8 +304,6 @@ typedef struct {
     double gf_ref_depth;           /* first-stop depth anchoring the GF slope */
     double slide_peak, slide_t0;   /* Scamahorn slide state */
     double gf_force;               /* >0: override GF (NDL check) */
-    bool   inter_stop;             /* this leg runs from one stop to the next */
-    double es_delay_min;           /* cumulative extra-slow hold time (v1.8.0) */
     zp_result *out;                /* for recording mid-water gas switches */
     int    ncomp;                  /* active compartments: 17 Buhlmann, 12 VVAL */
     int    rmv_switched;           /* deco RMV engaged yet? */
@@ -844,27 +836,6 @@ static double rate_for(const zp_rate_range *r, int n, double depth,
 }
 
 /* travel between depths at configured rates; is_ascent picks the table */
-/* Largest off-gassing gradient over all compartments at the current depth:
- * tissue inert tension minus AMBIENT pressure, i.e. supersaturation.
- *
- * v1.8.0: this previously measured tension minus *inspired* inert pressure.
- * On an oxygen decompression gas the inspired inert pressure is zero, so that
- * quantity collapsed to the raw tissue tension (2-3 bar) and sat permanently
- * above the 1.25 bar threshold — at 6 m the ambient pressure alone is 1.6 bar,
- * so the test passed even for a diver with no supersaturation at all. The rule
- * could then never clear and always burned its entire delay budget. Measuring
- * supersaturation is both the intended rule and a quantity that actually falls
- * as the diver off-gasses, so the hold ends when the diver is ready to ascend. */
-static double offgas_gradient_at(const sim *s, double target_m) {
-    (void)target_m;
-    double pa = pamb(s, s->depth), worst = 0;
-    for (int i = 0; i < s->ncomp; i++) {
-        double g = (s->pn2[i] + s->phe[i]) - pa;    /* supersaturation */
-        if (g > worst) worst = g;
-    }
-    return worst;
-}
-
 /* Forward declarations: travel() switches gas mid-water and therefore needs
  * these, but they are defined further down alongside the other deco helpers. */
 static void   select_deco_source(sim *s, double depth);
@@ -948,21 +919,7 @@ static void travel(sim *s, double to_m, bool ascent) {
         }
     }
     double dir = (to_m > s->depth) ? 1.0 : -1.0;
-    double delayed = 0;
     while (fabs(s->depth - to_m) > 1e-9) {
-        /* Extra-slow ascent rule: while the off-gassing gradient of any
-         * compartment exceeds the threshold, hold depth instead of rising.
-         * The ascent to the next stop is therefore stretched, not the stop
-         * before it; the ceiling is never crossed because this only ever
-         * adds time at the deeper depth. */
-        if (s->cfg->extra_slow && ascent && dir < 0 && s->inter_stop &&
-            delayed < EXTRA_SLOW_MAX_DELAY_MIN &&
-            offgas_gradient_at(s, to_m) > EXTRA_SLOW_GRADIENT_BAR) {
-            tick(s, s->depth, DT, false);
-            delayed += DT;
-            s->es_delay_min += DT;   /* counted as deco time by the caller */
-            continue;
-        }
         double rate = ascent
             ? rate_for(s->cfg->ascent,  s->cfg->n_ascent,  s->depth, 10.0)
             : rate_for(s->cfg->descent, s->cfg->n_descent, s->depth, 20.0);
@@ -1715,29 +1672,8 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         out->total_deco_min += stop_time;
 
         leg_start = s->runtime;
-        s->inter_stop = (gg > 1e-9 && stop_time > 1e-9);
-        /* only between real stops: never on the run-up from the bottom, and
-         * never on the final ascent to the surface */
-        {   /* v1.8.0: time spent held by the extra-slow rule is decompression
-             * time and must be reported as such. Previously only stop_time was
-             * counted, so switching the rule on made TOTAL DECO TIME *fall*
-             * while the diver actually stayed under water considerably longer. */
-            double es_before = s->es_delay_min;
-            travel(s, gg, true);
-            double held = s->es_delay_min - es_before;
-            out->total_deco_min += held;
-
-            /* v1.8.2: charge the hold to the stop it happens at, not to the
-             * ascent leg. The rule holds depth at the stop before rising, but
-             * the delay used to land in the travel line, which then read as a
-             * 6:01 ascent over 3 m — alarming and physically misleading. It now
-             * shows as extra time at the stop, and the ascent reads normally. */
-            if (held > 1e-9 && norm_idx >= 0) {
-                out->lines[norm_idx].stop_sec    += held * 60.0;
-                out->lines[norm_idx].runtime_min += held;
-            }
-        }
-        s->inter_stop = false;
+        (void)norm_idx;
+        travel(s, gg, true);
         if (gg <= 1e-9) break;
     }
 
@@ -1989,6 +1925,40 @@ int zp_parse_profile(const char *text, zp_config *cfg,
     double d2m = 1.0 / FT_PER_M;         /* depth unit -> metres */
     double v2l = L_PER_CUFT;             /* RMV unit -> litres */
     cfg->rmv_metric = -1;                /* follow UseMetric unless overridden */
+
+    /* Pass one: find the unit flags wherever they sit.
+     *
+     * Scaling is applied as each key is read, so before this pass any depth or
+     * RMV value appearing above UseMetric was converted with the imperial
+     * default — silently, and with no diagnostic. ZPlan's own documentation
+     * works around it by demanding UseMetric be the first line in the file,
+     * but a profile.dat written by hand, by an older build, or by another tool
+     * has no such guarantee, and the failure is invisible in the output. */
+    for (const char *q = text; *q; ) {
+        char l2[512];
+        size_t m2 = 0;
+        while (q[m2] && q[m2] != '\n' && m2 < sizeof l2 - 1) m2++;
+        memcpy(l2, q, m2); l2[m2] = 0;
+        q += m2; if (*q == '\n') q++;
+        trim(l2);
+        if (!l2[0] || l2[0] == '#') continue;
+        char *c2 = strchr(l2, ':');
+        if (!c2 || !isalpha((unsigned char)l2[0])) continue;
+        *c2 = 0;
+        char k2[64]; strncpy(k2, l2, sizeof k2 - 1); k2[63] = 0;
+        trim(k2);
+        for (char *k = k2; *k; k++) *k = (char)tolower((unsigned char)*k);
+        char *v2 = c2 + 1; trim(v2);
+        if (!strcmp(k2, "usemetric")) {
+            metric = truthy(v2);
+            cfg->metric_output = metric;
+            d2m = metric ? 1.0 : 1.0 / FT_PER_M;
+            v2l = metric ? 1.0 : L_PER_CUFT;
+        } else if (!strcmp(k2, "rmvmetric")) {
+            cfg->rmv_metric = truthy(v2) ? 1 : 0;
+        }
+    }
+
     char line[512];
     const char *p = text;
     int lineno = 0;
@@ -2082,7 +2052,10 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 cfg->use_b_values = false;
             }
             else if (!strcmp(key, "rmvmetric")) cfg->rmv_metric = truthy(val) ? 1 : 0;
-            else if (!strcmp(key, "extraslow")) cfg->extra_slow = truthy(val);
+            /* v1.23.0: the experimental extra-slow ascent rule was removed.
+             * The key is still accepted so that saved profiles and third-party
+             * files do not raise "unknown key"; it now does nothing. */
+            else if (!strcmp(key, "extraslow")) { /* removed in v1.23.0 */ }
             else if (!strcmp(key, "ascentcredit")) cfg->ascent_credit = truthy(val);
             else if (!strcmp(key, "compartment1b")) cfg->use_1b = truthy(val);
             else if (!strcmp(key, "ndlgf")) cfg->ndl_gf_low = (*val=='l'||*val=='L');

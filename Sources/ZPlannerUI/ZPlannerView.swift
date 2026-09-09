@@ -246,9 +246,14 @@ struct LogEntry: Identifiable, Codable {
 /// entered could silently reinterpret a 45 m dive as 45 ft.
 struct PlannerState: Codable {
     var depthsMetric = true, rmvMetric = true, saltWater = true, o2Narcotic = false
+    /// Set once the diver picks the RMV units themselves. Optional so that a
+    /// state.json written by an earlier build still decodes — a non-optional
+    /// addition would throw, and the loader's `?? PlannerState()` fallback
+    /// would silently discard every saved setting and dive level.
+    var rmvMetricOverride: Bool? = nil
     var model = "c"
     var useGF = false, gfLow = "30", gfHigh = "85", altGfLow = "90", altGfHigh = "90"
-    var extraSlow = false, ndlLow = false
+    var ndlLow = false
     var altitude = "0", conservatism = 10.0
     var altitudeEquilibrated = false, hoursAtAltitude = "0"
     var deepStops = "p", pyleTime = 1, stopDistance = "3", lastStop = "3"
@@ -312,6 +317,10 @@ final class PlannerModel: ObservableObject {
     // ---- Config sheet ----
     @Published var depthsMetric = true          // Depths: Feet / Meters
     @Published var rmvMetric = true             // RMVs: Cu.ft / Liters
+    /// True once the diver has set the RMV units explicitly. Until then the RMV
+    /// units follow the depth units and no `RmvMetric:` line is written, which
+    /// lets the engine's own "follow UseMetric" default (rmv_metric = -1) apply.
+    @Published var rmvMetricOverride = false
     @Published var saltWater = true             // Water: Fresh / Salt
     @Published var o2Narcotic = false           // O2 Narcotic: No / Yes
     @Published var model = "c"                  // "c" ZHL16-C, "vval" VVAL-18, "vpm" VPM-B
@@ -325,7 +334,6 @@ final class PlannerModel: ObservableObject {
     @Published var gfHigh = "85"
     @Published var altGfLow = "90"
     @Published var altGfHigh = "90"
-    @Published var extraSlow = false
     @Published var ndlLow = false
     @Published var altitude = "0"
     /// Above sea level only. False plus hoursAtAltitude 0 is the diver who
@@ -389,11 +397,14 @@ final class PlannerModel: ObservableObject {
 
     private func apply(_ s: PlannerState) {
         depthsMetric = s.depthsMetric; rmvMetric = s.rmvMetric
+        // Absent in states written before v1.22: infer an override from the
+        // saved pair, so a diver who had deliberately mixed units keeps them.
+        rmvMetricOverride = s.rmvMetricOverride ?? (s.rmvMetric != s.depthsMetric)
         saltWater = s.saltWater; o2Narcotic = s.o2Narcotic
         model = s.model
         useGF = s.useGF; gfLow = s.gfLow; gfHigh = s.gfHigh
         altGfLow = s.altGfLow; altGfHigh = s.altGfHigh
-        extraSlow = s.extraSlow; ndlLow = s.ndlLow
+        ndlLow = s.ndlLow
         altitude = s.altitude; conservatism = s.conservatism
         altitudeEquilibrated = s.altitudeEquilibrated
         hoursAtAltitude = s.hoursAtAltitude
@@ -416,11 +427,12 @@ final class PlannerModel: ObservableObject {
     private var snapshot: PlannerState {
         var s = PlannerState()
         s.depthsMetric = depthsMetric; s.rmvMetric = rmvMetric
+        s.rmvMetricOverride = rmvMetricOverride
         s.saltWater = saltWater; s.o2Narcotic = o2Narcotic
         s.model = model
         s.useGF = useGF; s.gfLow = gfLow; s.gfHigh = gfHigh
         s.altGfLow = altGfLow; s.altGfHigh = altGfHigh
-        s.extraSlow = extraSlow; s.ndlLow = ndlLow
+        s.ndlLow = ndlLow
         s.altitude = altitude; s.conservatism = conservatism
         s.altitudeEquilibrated = altitudeEquilibrated
         s.hoursAtAltitude = hoursAtAltitude
@@ -478,9 +490,14 @@ final class PlannerModel: ObservableObject {
     }
 
     var profileText: String {
-        var p = """
-        UseMetric: \(depthsMetric ? "y" : "n")
-        RmvMetric: \(rmvMetric ? "y" : "n")
+        // UseMetric first, and RmvMetric immediately after it when the diver has
+        // pinned the gas units: the engine applies its unit scaling as each key
+        // is read, so both flags have to precede any value they govern.
+        // Omitting RmvMetric is deliberate, not an oversight — it is what makes
+        // the engine's "gas units follow depth units" default apply.
+        var p = "UseMetric: \(depthsMetric ? "y" : "n")\n"
+        if rmvMetricOverride { p += "RmvMetric: \(rmvMetric ? "y" : "n")\n" }
+        p += """
         SaltWater: \(saltWater ? "y" : "n")
         Model: \(model == "vval" ? "vval18" : model == "vpm" ? "vpm" : "zhl16c")
         Altitude: \(altitude)
@@ -515,7 +532,6 @@ final class PlannerModel: ObservableObject {
             let hi = useAltGF ? altGfHigh : gfHigh
             p += "\nGradientFactors: \(lo), \(hi)"
         }
-        p += "\nExtraSlow: \(extraSlow ? "y" : "n")"
         p += "\nNdlGF: \(ndlLow ? "low" : "high")"
         for r in descentRates.split(whereSeparator: \.isNewline) { p += "\nDescentRate: \(r)" }
         for r in ascentRates.split(whereSeparator: \.isNewline)  { p += "\nAscentRate: \(r)" }
@@ -547,6 +563,110 @@ final class PlannerModel: ObservableObject {
 
     private func fmt(_ v: Double) -> String {
         v == v.rounded() ? String(Int(v)) : String(v)
+    }
+
+    // MARK: - Units
+    //
+    // Settings are held in whatever units the diver is working in, and the
+    // engine is asked to compute in those same units — a 10 ft stop grid is a
+    // grid of whole feet, not of 3.048 m. Flipping a units control therefore
+    // has to rewrite every value that carries a dimension. Before v1.22 it
+    // rewrote none of them, so switching to Feet reinterpreted the metric
+    // defaults as feet: a 3 m last stop silently became 3 ft, and the ascent
+    // bands (70-30, 30-12, 12-0) left a 131 ft dive with no defined rate at
+    // all above 70 ft.
+
+    private static let ftPerM = 3.280839895013123
+    private static let litresPerCuFt = 28.316846592
+
+    /// Depth unit in force, for labels.
+    var depthUnit: String { depthsMetric ? "m" : "ft" }
+    /// RMV / gas-volume unit in force, for labels.
+    var rmvUnit: String { rmvMetric ? "L/min" : "cu.ft/min" }
+
+    /// Switch the depth unit system, converting every depth-dimensioned value.
+    ///
+    /// Named `changeDepthUnits` rather than `setDepthsMetric` to match the
+    /// Kotlin port, where the latter collides with the JVM setter that the
+    /// `depthsMetric` property already generates.
+    ///
+    /// Rounding is to whole units, which is what makes the round trip stable:
+    /// 3 m -> 10 ft -> 3 m, 40 m -> 131 ft -> 40 m. It also lands on the
+    /// conventional imperial values divers expect (a 10 ft stop grid, not 9.8).
+    func changeDepthUnits(_ metric: Bool) {
+        guard metric != depthsMetric else { return }
+        let f = metric ? 1.0 / Self.ftPerM : Self.ftPerM
+        altitude      = scale(altitude, f)
+        stopDistance  = scale(stopDistance, f)
+        lastStop      = scale(lastStop, f)
+        maxEND        = scale(maxEND, f)
+        descentRates  = scaleLines(descentRates, f, skip: [])
+        ascentRates   = scaleLines(ascentRates, f, skip: [])
+        // "80-30, 1.4": the depths convert, the setpoint must not.
+        decoSetpoints = scaleLines(decoSetpoints, f, skip: [2])
+        levels = levels.map { var l = $0; l.d = scale(l.d, f); return l }
+        entry.d = scale(entry.d, f)
+        depthsMetric = metric
+        // Gas units follow depth units unless the diver has said otherwise.
+        if !rmvMetricOverride { applyRmvUnits(metric) }
+    }
+
+    /// Switch the RMV / gas-volume unit system. Marks the choice as explicit,
+    /// which pins it against later depth-unit changes and makes the planner
+    /// write an `RmvMetric:` line to say so.
+    func changeRmvUnits(_ metric: Bool) {
+        rmvMetricOverride = true
+        applyRmvUnits(metric)
+    }
+
+    private func applyRmvUnits(_ metric: Bool) {
+        guard metric != rmvMetric else { return }
+        // 19 L/min <-> 0.67 cu.ft/min. Two decimals imperial, whole litres
+        // metric: a cubic foot is coarse enough that 0.1 would lose 3 L/min.
+        if metric {
+            bottomRMV = scale(bottomRMV, Self.litresPerCuFt, dp: 0)
+            decoRMV   = scale(decoRMV,   Self.litresPerCuFt, dp: 0)
+        } else {
+            bottomRMV = scale(bottomRMV, 1.0 / Self.litresPerCuFt, dp: 2)
+            decoRMV   = scale(decoRMV,   1.0 / Self.litresPerCuFt, dp: 2)
+        }
+        rmvMetric = metric
+    }
+
+    /// Scale one numeric field. Anything unparseable is left exactly as typed —
+    /// a half-finished entry must never be silently rewritten to something else.
+    private func scale(_ s: String, _ f: Double, dp: Int = 0) -> String {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, let v = Double(t) else { return s }
+        return round(v * f, dp)
+    }
+
+    private func round(_ v: Double, _ dp: Int) -> String {
+        let p = pow(10.0, Double(dp))
+        let r = (v * p).rounded() / p
+        return dp == 0 ? String(Int(r)) : String(format: "%.\(dp)f", r)
+    }
+
+    /// Scale every number in a multi-line list, per line, skipping the
+    /// positions named in `skip` (0-based within the line).
+    private func scaleLines(_ s: String, _ f: Double, skip: Set<Int>) -> String {
+        s.split(separator: "\n", omittingEmptySubsequences: false)
+         .map { line -> String in
+             var out = "", num = "", idx = 0
+             func flush() {
+                 guard !num.isEmpty else { return }
+                 if !skip.contains(idx), let v = Double(num) { out += round(v * f, 0) }
+                 else { out += num }
+                 idx += 1; num = ""
+             }
+             for ch in line {
+                 if ch.isNumber || ch == "." { num.append(ch) }
+                 else { flush(); out.append(ch) }
+             }
+             flush()
+             return out
+         }
+         .joined(separator: "\n")
     }
 
     /// Add a new level, or commit changes to the one being edited.
@@ -652,7 +772,6 @@ final class PlannerModel: ObservableObject {
             extras.append("deco \(decoGases)")
         }
         if deepStops == "p" && !gfOn { extras.append("Pyle \(pyleTime) min") }
-        if extraSlow { extras.append("extra-slow") }
         if extStopShallow > 0 || extStopDeep > 0 {
             extras.append("ext stops \(extStopDeep)/\(extStopShallow) min")
         }
@@ -726,6 +845,27 @@ final class PlannerModel: ObservableObject {
 // MARK: - Root
 
 public struct ZPlannerView: View {
+    /// Where contributions go. Shown in the macOS build only — see infoSheet.
+    static let paypalAddress = "landercarlos@hotmail.com"
+
+    /// PayPal.Me handle, without the leading "paypal.me/". Empty = no link, and
+    /// the Info panel then shows the address alone.
+    ///
+    /// This replaces the `/donate/` endpoint, which PayPal refuses outright in
+    /// some countries — "Donations aren't supported in this organization's
+    /// country" — regardless of the parameters passed. PayPal.Me is a plain
+    /// payment link, not a donation flow, so that restriction does not apply;
+    /// it needs only a personal account, and the sender types the amount
+    /// themselves. Claim one free at paypal.me. Note it cannot be changed or
+    /// deleted afterwards, so pick the handle deliberately.
+    static let paypalHandle = "carloselander"
+
+    /// One tap to a payable page, because a plain address asks the reader to
+    /// open PayPal, find "send money" and retype it — three chances to give up.
+    static var paypalURL: URL? {
+        paypalHandle.isEmpty ? nil
+                             : URL(string: "https://paypal.me/\(paypalHandle)")
+    }
     @StateObject private var m = PlannerModel()
     @State private var showConfig = false
     @State private var showLog = false
@@ -843,6 +983,40 @@ public struct ZPlannerView: View {
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                     Divider()
+                    // macOS only, deliberately. An iOS build may not ask for or
+                    // link to donations outside the App Store — App Review
+                    // guideline 3.2.2(vi) treats it as circumventing in-app
+                    // purchase, and it is a rejection every time. The same block
+                    // appears in the F-Droid Android build, which has no such
+                    // restriction, and is absent from the Play build.
+                    #if os(macOS)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Support the developer")
+                            .fontWeight(.semibold)
+                        Text("Lplanner is free and has no adverts, no tracking "
+                           + "and no subscription. If it has been useful to you, "
+                           + "you can send the developer a contribution:")
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let url = Self.paypalURL {
+                            Link("Send a contribution with PayPal", destination: url)
+                                .font(.callout.weight(.semibold))
+                            // The address stays visible under the link: some
+                            // people will not follow a payment link from inside
+                            // an app, and should not have to hunt for another
+                            // way to do it.
+                            Text("or send to \(Self.paypalAddress)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                        } else {
+                            Text("PayPal, to \(Self.paypalAddress)")
+                                .font(.system(.callout, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Divider()
+                    #endif
                     // Engine version AND the build this came from. The engine
                     // number alone was ambiguous once builds went out to
                     // testers: "I'm on 1.10.0" identifies the maths, not the
@@ -1078,9 +1252,24 @@ struct ConfigSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     group("Units",
-                          help: "Depths sets the units for depth, altitude, stop distance and END. RMVs sets the units for breathing-rate and gas-consumption figures — the two can differ.") {
-                        row("Depths") { seg($m.depthsMetric, off: "Feet", on: "Meters") }
-                        row("RMVs")   { seg($m.rmvMetric, off: "Cu.ft.", on: "Liters") }
+                          help: "Depths sets the units for depth, altitude, stop distance, END, ascent and descent rates, and the dive levels themselves. Every value already entered is converted when you switch, and the plan is then computed in those units — a 10 ft stop grid is a grid of whole feet. RMVs sets the units for breathing-rate and gas-consumption figures; it follows Depths until you set it yourself, after which it stays where you put it.") {
+                        // The conversion is deferred by one runloop turn on
+                        // purpose. A Picker calls its binding's setter while
+                        // SwiftUI is still evaluating this view, and these
+                        // setters publish changes to a dozen @Published
+                        // properties — doing that mid-update draws "Publishing
+                        // changes from within view updates is not allowed",
+                        // which SwiftUI documents as undefined behaviour.
+                        row("Depths") {
+                            seg(Binding(get: { m.depthsMetric },
+                                        set: { v in DispatchQueue.main.async { m.changeDepthUnits(v) } }),
+                                off: "Feet", on: "Meters")
+                        }
+                        row("RMVs") {
+                            seg(Binding(get: { m.rmvMetric },
+                                        set: { v in DispatchQueue.main.async { m.changeRmvUnits(v) } }),
+                                off: "Cu.ft.", on: "Liters")
+                        }
                     }
                     group("Environment",
                           help: "Fresh or salt water changes the depth-to-pressure conversion. O2 Narcotic controls whether oxygen counts as narcotic when calculating equivalent narcotic depths (ENDs).") {
@@ -1139,7 +1328,7 @@ struct ConfigSheet: View {
                     }
                     group("Conditions",
                           help: "Altitude of the dive site, 0 for sea level. Above sea level the air is thinner, so the same dive carries more decompression. Equilibrated means your tissues have off-gassed their excess nitrogen to match the thinner air; the U.S. Navy Diving Manual puts that at about twelve hours at altitude. If you drove up this morning you are still carrying your sea-level nitrogen and need considerably more decompression — at 3000 m that can double the obligation, so state it honestly. Hours at altitude covers the middle: the tissues wash out at their own rates, and the slow ones are still loaded well after the fast ones have finished. Note this is equilibration, not acclimatisation — adjusting to the lower oxygen takes far longer and is not modelled here at all. Conservatism applies only to ZHL16-C with gradient factors switched off. It (0–50 %) preloads the tissue compartments with additional inert gas — nitrogen, and helium in proportion when the profile uses trimix — weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.") {
-                        row2("Altitude", $m.altitude)
+                        row2("Altitude (\(m.depthUnit))", $m.altitude)
                         // Only shown above sea level, where the two references
                         // differ. At 0 m equilibrated and just-arrived are the
                         // same tissue loading and the control would be noise.
@@ -1176,8 +1365,8 @@ struct ConfigSheet: View {
                     group("Stop depths",
                           help: "Stop distance is the interval between decompression stops — 3 m is the convention, some rebreather divers prefer 6 m. Last stop is the depth of the final stop; some prefer pulling the 10 ft / 3 m stop deeper. Both apply to every schedule, whichever model, gradient factors or deep stops are in use.") {
                         HStack(spacing: 16) {
-                            row2("Stop distance", $m.stopDistance)
-                            row2("Last stop", $m.lastStop)
+                            row2("Stop distance (\(m.depthUnit))", $m.stopDistance)
+                            row2("Last stop (\(m.depthUnit))", $m.lastStop)
                         }
                     }
                     if !(m.useGF && m.model == "c") {
@@ -1193,16 +1382,12 @@ struct ConfigSheet: View {
                             }
                         }
                     }
-                    group("Ascent behaviour (experimental)",
-                          help: "Extra slow delays the ascent to the next stop while the off-gassing gradient of any compartment — tissue inert tension minus ambient pressure, i.e. supersaturation — exceeds 1.25 bar. It only ever adds time at the deeper depth, so the schedule stays below the gradient factor regardless of the rule. Two limits keep it practical: it never applies to the final ascent to the surface, and it adds at most 5 minutes per stop. Time spent held is counted in the total decompression time. Noticeable on dives that leave a compartment strongly supersaturated at the stop.") {
-                        Toggle("Extra slow ascent rule", isOn: $m.extraSlow)
-                    }
-                    group("Descent — range, rate",
-                          help: "One range per line: depth1-depth2, rate (ft or m per minute). List shallowest range first, leave no gaps.") {
+                    group("Descent — range, rate (\(m.depthUnit)/min)",
+                          help: "One range per line: depth1-depth2, rate, all in \(m.depthUnit). List shallowest range first, leave no gaps — a depth not covered by any range has no rate to travel at.") {
                         editor($m.descentRates, height: 52)
                     }
-                    group("Ascent — range, rate (deepest first)",
-                          help: "One range per line, deepest range first, no gaps. Slow shallow ascent rates are credited to the decompression and can shorten stops or remove them entirely.") {
+                    group("Ascent — range, rate (\(m.depthUnit)/min, deepest first)",
+                          help: "One range per line, deepest range first, no gaps, all in \(m.depthUnit). The deepest range must reach at least your deepest level, or the ascent from the bottom has no defined rate. Slow shallow ascent rates are credited to the decompression and can shorten stops or remove them entirely.") {
                         editor($m.ascentRates, height: 76)
                     }
                     group("Deco Set Point (CCR) / Slide rate",
@@ -1215,12 +1400,14 @@ struct ConfigSheet: View {
                     group("Extended stops on a deco mix switch",
                           help: "Extra minutes held at the depth where the planner switches to a deco mix, on top of whatever the model requires. Common practice: settle on the new gas, confirm the analysis and the PO2, and let the switch do some work for you. The amount is chosen by the depth of the switch, in two bands. Switches shallower than 7 m / 23 ft are not extended — the final stop is already long. The extra time off-gasses you, so it does not simply add to the total: the stops above it usually shorten.") {
                         HStack(spacing: 16) {
-                            Stepper("30 m+ : \(m.extStopDeep) min",
+                            Stepper(m.depthsMetric ? "30 m+ : \(m.extStopDeep) min"
+                                                   : "100 ft+ : \(m.extStopDeep) min",
                                     value: $m.extStopDeep, in: 0...10)
                                 .frame(maxWidth: 260)
                         }
                         HStack(spacing: 16) {
-                            Stepper("7–30 m : \(m.extStopShallow) min",
+                            Stepper(m.depthsMetric ? "7–30 m : \(m.extStopShallow) min"
+                                                   : "23–100 ft : \(m.extStopShallow) min",
                                     value: $m.extStopShallow, in: 0...10)
                                 .frame(maxWidth: 260)
                         }
@@ -1229,14 +1416,14 @@ struct ConfigSheet: View {
                           help: "The planner auto-selects the deco gas with the highest PO2 that stays within Max PO2 and Max END. Set Max PO2 to 1.6 if you want 100% O2 at the 20 ft / 6 m stop; tune it down to lower CNS exposure at the cost of longer deco.") {
                         HStack(spacing: 16) {
                             row2("Max PO2", $m.maxPO2)
-                            row2("Max END", $m.maxEND)
+                            row2("Max END (\(m.depthUnit))", $m.maxEND)
                         }
                     }
                     group("RMV values",
                           help: "Respiratory Minute Volume for gas-consumption planning, in the RMV units above. Deco is usually lower than Bottom, since you are more at rest hanging on the line. If you don't know your RMV, measure it.") {
                         HStack(spacing: 16) {
-                            row2("Bottom", $m.bottomRMV)
-                            row2("Deco", $m.decoRMV)
+                            row2("Bottom (\(m.rmvUnit))", $m.bottomRMV)
+                            row2("Deco (\(m.rmvUnit))", $m.decoRMV)
                         }
                     }
                 }

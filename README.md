@@ -1,4 +1,4 @@
-# ZPlanKit v1.9.5
+# ZPlanKit v1.23.0
 
 > **WARNING**
 >
@@ -248,6 +248,73 @@ Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.23.0** (2026-09-08) — **The experimental extra-slow ascent rule is
+  removed**, along with its `ExtraSlow` toggle, the `extra_slow` config field
+  and the engine branch. `ExtraSlow:` is still accepted in a `profile.dat` and
+  ignored, so existing files do not raise "unknown key".
+  It was removed because it never did anything. Two independent reasons, both
+  measured:
+  (1) `offgas_gradient_at()` took the depth being ascended to and discarded it
+  (`(void)target_m;`), measuring supersaturation at the depth the diver was
+  already at. Since tissue tensions do not depend on depth, the two readings
+  differ by exactly the ambient-pressure gap, (d_current − d_target) × 0.0993
+  bar/m — 0.30 bar on a 3 m or 10 ft grid, or 24 % of the 1.25 bar threshold.
+  On the `multideco_230ft` reference dive that is the difference between 0
+  holds and 4: peak gradient 1.165 bar as coded, 1.266 bar as documented.
+  (2) More fundamentally, an absolute 1.25 bar trigger is incompatible with
+  gradient factors, whose entire purpose is to cap supersaturation below the
+  M-value. Measured peak gradients: 0.43 bar (30 m/60 min air, GF 30/85),
+  0.67 (40 m/20 min air, 30/85), 0.93 (70 m/25 min 18/45, 45/85), 1.01
+  (100 m/20 min 10/70, 30/80), 1.17 (230 ft/26 min 18/45, 45/85). The rule
+  only ever engaged at GF 100/100 — the raw Bühlmann ceiling. Fixing (1) would
+  not have changed that.
+  Two further defects went with it: the 5-minute cap was a local in `travel()`,
+  which recurses at a gas switch, so a leg crossing a MOD had a fresh budget on
+  each side; and the v1.8.2 note claiming the rule "holds depth at the stop"
+  was wrong — traced on a 120 m dive it held across the whole leg (36.0 m down
+  to 33.2 m), a crawl, while the plan charged all of it to the stop line.
+  **No schedule changes.** Every bundled sample — `profile.dat`,
+  `multideco_230ft.dat`, `trimix55.dat`, `vval18_100ft.dat` — is byte-identical
+  to v1.21.0 output, which is the point: with the recommended settings the rule
+  had never altered a plan.
+* **v1.22.0** (2026-09-07) — Imperial units fixed across all three front ends
+  (macOS/iOS, Android, F-Droid), from a tester report that Imperial "was not
+  working well". Two defects, both in the UI layer; the engine's arithmetic was
+  never at fault.
+  (1) **Switching units converted nothing.** Every Config value was held as a
+  raw string and passed through verbatim, and every shipped default was a metric
+  number, so selecting Feet reinterpreted them as feet: a 3 m stop grid and 3 m
+  last stop became 3 ft, `MaxEND` 40 m became 40 ft, descent 15 m/min became
+  15 ft/min, and the ascent bands (70-30, 30-12, 12-0) left a 131 ft dive with
+  **no defined ascent rate at all above 70 ft**. The same 40 m / 20 min dive ran
+  45 min in Meters and 54 min in Feet, on stops of 51/33/27/18/15 ft. Flipping a
+  units control now converts altitude, stop distance, last stop, END, the
+  descent and ascent tables, the deco setpoint depths, the RMVs and the entered
+  dive levels, rounding to whole units so the round trip is lossless
+  (3 m -> 10 ft -> 3 m) and lands on the conventional imperial values.
+  (2) **The gas report could not be put into Imperial.** The engine has always
+  supported Cu.Ft. — `rmv_metric = -1` means "follow UseMetric" — but both UIs
+  emitted an explicit `RmvMetric:` line unconditionally, so that default was
+  dead code: Feet gave depths in feet and gas in litres. Worse, flipping the
+  RMVs control without fixing the numbers read `Rmv: 19` as 19 cu.ft/min
+  (≈538 L/min), reporting 2383 Cu.Ft. for a 40 m/20 min dive. The RMV units now
+  follow the depth units until the diver sets them explicitly, and `RmvMetric:`
+  is written only when they have.
+  Also: the parser is now two-pass, so `UseMetric` and `RmvMetric` are found
+  before any scaling is applied — previously a value placed above `UseMetric` in
+  a hand-written `profile.dat` was scaled with the imperial default, silently
+  (the old ZPlan docs work around this by requiring `UseMetric` to be line one).
+  Every Config field now shows its unit, and the extended-stop bands read
+  100 ft+ / 23–100 ft in Imperial.
+  **Validated:** the metric reference plan is byte-identical to v1.21.0;
+  Meters and Feet forms of the same dive now agree (44 vs 43 min run, gas within
+  0.5 %, stops on whole feet: 60/40/30/20/10); `UseMetric` first vs last in the
+  file now gives identical output. New cross-check `Samples/multideco_230ft.dat`
+  (230 ft / 18-45 / GF 45/85, MultiDeco's own settings) reproduces MultiDeco's
+  first stop, both gas switches and 8 of its 12 stop times exactly, the other
+  four one minute longer each — run time 110 min vs 104, conservative.
+  *(The version history below jumps from v1.9.5 to here: releases v1.10–v1.21
+  were not recorded in this file.)*
 * **v1.9.5** (2026-08-14) — The gas-switch row is marked `GasSw` rather than
   `Gas`. The left column is an event column, so the marker should read as an
   event; five characters keeps it the same width as `DStop` and nothing else in

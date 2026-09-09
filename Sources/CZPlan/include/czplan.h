@@ -88,7 +88,6 @@ typedef struct {
     double slide_rate;         /* Scamahorn slide: PO2 burned off per minute */
     bool   use_1b;            /* include Buhlmann's optional 1b compartment */
     bool   ascent_credit;      /* legacy ZPlan predictive ascent rule */
-    bool   extra_slow;         /* experimental: hold while offgas gradient > 1.25 bar */
     bool   ndl_gf_low;         /* NDL check uses GF-low (default: GF-high) */
     double altitude_m;
     /* EQUILIBRATION at altitude - not acclimatisation. The U.S. Navy Diving
