@@ -1,7 +1,6 @@
 # 55m/20min trimix 18/30 example, salt water, OC deco on EAN32/50/O2
 UseMetric: y
 SaltWater: y
-UseBValues: y
 Altitude: 0
 Conservatism: 10
 Precision: 1

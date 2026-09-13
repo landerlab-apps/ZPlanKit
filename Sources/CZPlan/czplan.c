@@ -23,7 +23,7 @@
  * community with the request that it be distributed freely and the authors
  * credited. This is an independent port; any error in it is mine, not theirs.
  *
- * The VVAL-18 implementation follows the U.S. Navy Thalmann EL-DCM as
+ * The VVAL-79 implementation follows the U.S. Navy Thalmann EL-DCM as
  * published. The helium handling is an unvalidated extrapolation of my own -
  * the Navy publishes no helium parameters for that model.
  */
@@ -38,7 +38,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.23.0"
+#define ZP_VERSION "1.35.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -71,13 +71,8 @@ static const double N2_B[ZP_COMPARTMENTS] = {   /* standard ZH-L16 order; the op
     0.5578, 0.6514, 0.7222, 0.7825, 0.8126, 0.8434, 0.8693, 0.8910,
     0.9092, 0.9222, 0.9319, 0.9403, 0.9477, 0.9544, 0.9602, 0.9653,
     0.5050 };
-/* ZHL-16B "a" values (table generation) */
-static const double N2_A_B[ZP_COMPARTMENTS] = {   /* standard ZH-L16 order; the optional
-    * 1b compartment is last and is used only when Compartment1b: y */
-    1.1696, 1.0000, 0.8618, 0.7562, 0.6667, 0.5600, 0.4947, 0.4500,
-    0.4187, 0.3798, 0.3497, 0.3223, 0.2850, 0.2737, 0.2523, 0.2327,
-    1.2599 };
-/* ZHL-16C "a" values (dive computers, more conservative) */
+/* ZH-L16C "a" values. The only Buhlmann set the engine carries: the
+ * ZH-L16B table-generation values were removed in v1.34.0. */
 static const double N2_A_C[ZP_COMPARTMENTS] = {   /* standard ZH-L16 order; the optional
     * 1b compartment is last and is used only when Compartment1b: y */
     1.1696, 1.0000, 0.8618, 0.7562, 0.6200, 0.5043, 0.4410, 0.4000,
@@ -103,7 +98,7 @@ static const double HE_B[ZP_COMPARTMENTS] = {   /* standard ZH-L16 order; the op
 /* O2 toxicity table, transcribed from ZPlan's o2.cfg                  */
 /* (NOAA CNS %/min and REPEX OTU/min vs PO2).                          */
 /* --------------------------------------------------------------------
- * U.S. Navy Thalmann EL-DCM — displayed as "VVAL-18" per owner request.
+ * U.S. Navy Thalmann EL-DCM with the VVal-79 air parameter set.
  * Parameters from the owner's parameters.py: nine NEDU VVAL-79 compartments
  * (NEDU TR 12-01 Table 3) + three fast [WORKING] compartments; crossover
  * pressures are [WORKING] estimates. MPTT slope = 1.0 fsw/fsw throughout.
@@ -111,9 +106,12 @@ static const double HE_B[ZP_COMPARTMENTS] = {   /* standard ZH-L16 order; the op
  * ------------------------------------------------------------------ */
 /* Decompression model selector (zp_config.use_vval) */
 #define ZP_MODEL_BUHLMANN 0
-#define ZP_MODEL_VVAL     1
+#define ZP_MODEL_VVAL79   1
 #define ZP_MODEL_VPMB     2
-#define IS_VVAL(c) ((c)->use_vval == ZP_MODEL_VVAL)
+/* Both Thalmann sets share the nine compartments, the nine half-times and the
+ * MPTT table. They differ only in SDR, PBOVP and the two FO2 thresholds, so
+ * every VVAL code path covers both. */
+#define IS_VVAL(c) ((c)->use_vval == ZP_MODEL_VVAL79)
 #define IS_VPM(c)  ((c)->use_vval == ZP_MODEL_VPMB)
 #define IS_BUHL(c) ((c)->use_vval == ZP_MODEL_BUHLMANN)
 
@@ -150,7 +148,7 @@ typedef struct {
 
 static vpm_state VPM;
 
-#define VVAL_NC 12
+#define VVAL_NC 9
 #define FSW2BAR (1.01325 / 33.0)
 /* VVal-79 gas-exchange constants, NEDU EL-DCA (Thalmann table-generation
  * report, Figures 30-34). All in fsw, converted here. */
@@ -159,7 +157,12 @@ static vpm_state VPM;
 #define VVAL_PVCO2_BAR  (2.30 * FSW2BAR)   /* venous CO2                     */
 #define VVAL_PVO2_BAR   (2.00 * FSW2BAR)   /* venous O2                      */
 #define VVAL_AMBAO2_BAR (0.00 * FSW2BAR)   /* ambient-arterial O2 gradient   */
-#define VVAL_SDR         0.70              /* saturation/desaturation ratio  */
+/* Saturation/desaturation ratio. VVal-79 Appendix B Table B.1 prints 0.70 on
+ * every compartment, gated by CNDSDR_FO2 - inherited unchanged from VVal-18M,
+ * where it was adopted "when breathing gases with fixed O2 fraction (FO2) >0.8
+ * ... to accommodate air diving and air diving with in-water O2
+ * decompression" (ADA561928). */
+#define VVAL_SDR         0.70
 /* Metabolic oxygen extraction expressed as a partial-pressure drop: about
  * 5 mL O2/dL of blood at a dissolved solubility of 0.003 mL/dL/mmHg, so
  * 1667 mmHg = 72.4 fsw. Below that, haemoglobin unloads and venous PO2 stays
@@ -168,62 +171,57 @@ static vpm_state VPM;
 #define VVAL_O2_METABOLIC_BAR (72.4 * FSW2BAR)
 #define VVAL_CNDSDR_FO2  0.80              /* SDR activation FO2 threshold   */
 #define VVAL_H2O_BAR (1.85 * FSW2BAR)      /* superseded; kept for tissue.dat */
+/* ---- VVal-79, the U.S. Navy air set -----------------------------------
+ *
+ * NEDU ADA561928, "VVal-79 Maximum Permissible Tissue Tension Table for
+ * Thalmann Algorithm Support of Air Diving". Table 3 and Appendix B.
+ *
+ *   Half-time   5    10    20    40    80   120   160   200   240
+ *   MPTT0     99.3  87.7  78.0  56.0  48.5  45.5  44.5  44.0  43.5
+ *   slope        1     1     1     1     1     1     1     1     1
+ *
+ * The report states it exactly: VVal-79 "is identical to the VVal-18M
+ * parameter set with the exception of the MPTT(i,0) values for the 5- and
+ * 10-minute halftime compartments". So SDR 0.70 gated at CNDSDR_FO2 0.80,
+ * PBOVP 10 fsw with sPBOVP 0 at the surface, slope 1, and the VVal-18 blood
+ * parameters all carry over unchanged.
+ *
+ * This is the set behind the U.S. Navy Diving Manual Revision 7 air tables,
+ * which is why it is the one the planner runs: a diver reading Table 9-7 and
+ * a diver running this model get the same no-stop limits.
+ *
+ * NITROGEN ONLY. VVal-79 was built for air and N2-O2 diving with in-water
+ * oxygen decompression, and the Navy publishes no helium parameters for the
+ * Thalmann algorithm. A plan carrying helium is refused, not computed. */
 static const double VVAL_HT_N2[VVAL_NC] = {
-    1.5, 2.5, 3.5, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 160.0, 200.0, 240.0 };
+    5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 160.0, 200.0, 240.0 };
 static const double VVAL_MPTT0_FSW[VVAL_NC] = {
-    120.0, 115.0, 108.0, 99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5 };
-/* Helium MPTT0, per compartment. Cochran's twenty-compartment trimix model
- * "included fast compartments to compensate for helium gas" (owner's InDepth
- * article). The mechanism: give the fast compartments a helium ceiling low
- * enough to bite early in the ascent, so a helium-loaded diver is held deep.
- * Air is untouched by construction - with no helium in a compartment the
- * mix-weighted MPTT0 reduces exactly to the nitrogen value.
- * Overridable for fitting with ZP_MPTT_HE="v0,...,v11". */
-static double VVAL_MPTT0_HE_FSW[VVAL_NC] = {
-    120.0, 115.0, 108.0, 99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5 };
-/* MPTT projection slope, per gas. Spec section 7 defines MPTT(D) = MPTT0 + a*D
- * and VVal-79 sets a = 1.0 throughout, which tolerates the same supersaturation
- * gradient at 54 m as at 3 m - the reason the model has no deep stops.
+    99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5 };
+/* MPTT projection slope. Both published nitrogen tables step by exactly 10 fsw
+ * per 10 fsw of stop depth, and scient-c_298 states "the slope parameter a(i)
+ * is 1". Not a tunable here, and not per-gas: the former per-gas slope existed
+ * only to hold a helium value that was never filled in. */
+#define VVAL_SLOPE 1.0
+/* PBOVP, the threshold overpressure at which washout turns linear. It is a
+ * GLOBAL scalar in every published set, not a per-compartment vector:
  *
- * a < 1 shrinks the tolerated gradient with depth. At D = 0 the term vanishes,
- * so the surfacing ceiling is untouched: deep stops that cost nothing shallow.
- * Nitrogen stays at 1.0 so air is unchanged. Override with ZP_SLOPE_HE. */
-static double VVAL_SLOPE_N2 = 1.0;
-static double VVAL_SLOPE_HE = 1.0;
-static void vval_slope_env(void) {
-    static int done = 0; if (done) return; done = 1;
-    const char *e = getenv("ZP_SLOPE_HE"); if (e) VVAL_SLOPE_HE = atof(e);
-}
-
-static void vval_mptt_he_env(void) {
-    static int done = 0; if (done) return; done = 1;
-    const char *e = getenv("ZP_MPTT_HE"); if (!e) return;
-    char buf[256]; strncpy(buf, e, 255); buf[255] = 0;
-    char *tok = strtok(buf, ","); int i = 0;
-    while (tok && i < VVAL_NC) { VVAL_MPTT0_HE_FSW[i++] = atof(tok); tok = strtok(NULL, ","); }
-}
-/* PBOVP, the crossover overpressure: 10.0 fsw for every compartment, per the
- * VVAL-79 spec section 9.
+ *     VVal-18    0.0 fsw    (TR 03-12 Table 3; scient-c_298 Table B.2)
+ *     VVal-18-1  0.0 fsw    (TR 03-12 Table 4)
+ *     HVAL21     0.0 fsw    (NEDU 1-85, Appendix E/G blood parameters)
+ *     NEDU TR 18-05 helium sets, 2018   0.0 fsw
+ *     VVal-18M  10.0 fsw    (scient-c_298 Table C.2)
  *
- * These were previously per-compartment fitted values (23, 17, 13, 11, 8...).
- * That fit existed only to compensate for the wrong linear rate law above: with
- * the rate fixed to the spec form, the published uniform 10 fsw reproduces the
- * NEDU manned-trial anchor (132 fsw / 20 min -> 9:00 at 20 fsw) exactly, which
- * the fitted set no longer does once the rate is correct.
- * Override for re-fitting with env ZP_PCROSS="v0,...,v11". */
-static double VVAL_PCROSS_FSW[VVAL_NC] = {
-    14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0, 14.0 };
-/* fitting hook: ZP_PCROSS="v0,v1,...,v11" overrides the table (temporary) */
-static void vval_pcross_env(void) {
-    static int done = 0;
-    if (done) return; done = 1;
-    const char *e = getenv("ZP_PCROSS");
-    if (!e) return;
-    char buf[256]; strncpy(buf, e, 255); buf[255] = 0;
-    char *tok = strtok(buf, ","); int i = 0;
-    while (tok && i < VVAL_NC) { VVAL_PCROSS_FSW[i++] = atof(tok); tok = strtok(NULL, ","); }
-}
-#define VVAL_HE_RATIO 2.6457513110645906   /* sqrt(28/4) */
+ * It was 14.0 here, which is none of them. That value was a hand-fit to one
+ * air anchor, compensating for the three invented fast compartments now
+ * removed - see Audit v2.2 for the measurement.
+ *
+ * sPBOVP is PBOVP at the surface and is 0.0 in every published set, including
+ * VVal-18M. The table-generation flowchart has an explicit step for it
+ * ("Set PBOVP: PBOVP = SPBOVP at surface"). */
+#define VVAL_PBOVP      10.0
+#define VVAL_SPBOVP      0.0
+/* No helium constant here: VVal-79 is nitrogen-only and helium plans are
+ * refused, so the sqrt(28/4) assumption NEDU's own data contradicts is gone. */
 
 /* ------------------------------------------------------------------ */
 typedef struct { double po2, cns, otu; } o2row;
@@ -266,7 +264,7 @@ static const o2row O2TAB[] = {
 };
 #define O2N ((int)(sizeof(O2TAB)/sizeof(O2TAB[0])))
 
-static void o2_rates(double po2, double *cns_min, double *otu_min) {
+static void o2tab_lookup(double po2, double *cns_min, double *otu_min) {
     if (po2 < O2TAB[0].po2) { *cns_min = 0; *otu_min = 0; return; }
     for (int i = 0; i < O2N - 1; i++) {
         if (po2 <= O2TAB[i+1].po2) {
@@ -277,6 +275,50 @@ static void o2_rates(double po2, double *cns_min, double *otu_min) {
         }
     }
     *cns_min = 100.0; *otu_min = 10.0;
+}
+
+/* CNS is a two-line fit to the log of the NOAA single-exposure table, from
+ * Erik Baker's "Oxygen Toxicity Calculations" via Robert Helling. The same
+ * coefficients appear in Subsurface (core/divelist.cpp) and Abysner
+ * (OxygenToxicityCalculator.kt), which is the only reason to trust them:
+ * two independent implementations agree to the last digit. Within about 7%
+ * of NOAA across 0.6 to 1.6 bar, and continuous, so there is no bracket to
+ * fall between.
+ *
+ * The upper branch is anchored between 1.5 and 1.6 bar and goes vertical
+ * past it - 5.7 %/min at 1.7, 15 at 1.8 - and neither Subsurface nor Abysner
+ * clamps it. Above 1.60 this keeps the original O2TAB instead, which is
+ * deliberately punitive up there (50 %/min from 1.80, 100 from 2.20). US Navy
+ * in-water oxygen decompression runs at 1.91 ata, so that region is real.
+ *
+ * OTU is Baker's Eq. 2 in the third-order continuous form both projects use.
+ * The integration step here is one second, so PO2 is constant across a step,
+ * the ramp-correction term is zero, and this reduces to REPEX with exponent
+ * 5/6 rather than the classic 0.83. Sub-threshold clipping is handled by the
+ * early return.
+ *
+ * Input is the ALVEOLAR PO2 (ambient less water vapour), which is what the
+ * engine has always fed this function and what the owner chose to keep.
+ * Subsurface and Abysner both use ambient instead, so our CNS runs about 9%
+ * below theirs for the same schedule. That is a deliberate divergence. */
+#define CNS_FIT_TOP  1.60
+/* Advisory thresholds on the whole-dive CNS total. 100 is NOAA's
+ * single-exposure limit; 80 is a margin call, not a published figure. */
+#define CNS_LIMIT_PCT 100.0
+#define CNS_WARN_PCT   80.0
+
+static void o2_rates(double po2, double *cns_min, double *otu_min) {
+    if (po2 <= 0.5) { *cns_min = 0; *otu_min = 0; return; }
+    if (po2 <= CNS_FIT_TOP) {
+        double e = (po2 <= 1.5) ? (-11.7853 + 1.93873 * po2)
+                                : (-23.6349 + 9.80829 * po2);
+        *cns_min = exp(e) * 6000.0;         /* per-second fraction -> %/min */
+    } else {
+        double dummy;
+        o2tab_lookup(po2, cns_min, &dummy);
+    }
+    double pm = 2.0 * po2 - 1.0;            /* (Pa + Pb) - 1, Pa == Pb here */
+    *otu_min = pow(pm, 5.0 / 6.0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -307,6 +349,13 @@ typedef struct {
     zp_result *out;                /* for recording mid-water gas switches */
     int    ncomp;                  /* active compartments: 17 Buhlmann, 12 VVAL */
     int    rmv_switched;           /* deco RMV engaged yet? */
+    double on_o2_min;              /* elapsed oxygen time since last break;
+                                    * carried ACROSS stop changes, travel
+                                    * excluded, per NEDU TR 07-09 */
+    bool   freeze_inert;           /* Navy air break: no gas exchange */
+    bool   cns_armed;              /* CNS condition has tripped once */
+    bool   cc_cns_warned;          /* CCR advice already given */
+    bool   chosen_gas_warned;      /* chosen break gas unusable, said once */
     char *warn; size_t warnlen;
 } sim;
 
@@ -407,7 +456,10 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
     inspired(s, depth_m, &pin2, &pihe, &pio2);
     (void)is_bottom;
     double pa_now = pamb(s, depth_m);
-    for (int i = 0; i < s->ncomp; i++) {
+    /* Navy air break: AB_DEAD. Inert gas exchange stops for the duration.
+     * Everything below the loop - CNS, OTU, gas consumption, run time -
+     * carries on, because the break exists to slow the oxygen clock. */
+    for (int i = 0; !s->freeze_inert && i < s->ncomp; i++) {
         double dtn = dt, dth = dt;
         if (IS_VVAL(s->cfg)) {
             /* Thalmann EL-DCM: exponential uptake; during offgassing, a
@@ -436,6 +488,10 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
              * scaled by SDR when running constant PO2, OR when FN2 is at or
              * below (1 - CNDSDR_FO2). Note the first condition: on a
              * rebreather SDR applies unconditionally, whatever the FO2. */
+            /* VVal-18 prints 1.00 SDR on every compartment, so the gate is
+             * moot there; VVal-18M prints 0.70, adopted "when breathing gases
+             * with fixed O2 fraction (FO2) >0.8 ... to accommodate air diving
+             * and air diving with in-water O2 decompression" (ADA561928). */
             bool sdr_on = s->cc || (1.0 - s->fo2 - s->fhe) <= (1.0 - VVAL_CNDSDR_FO2);
             double sdr = sdr_on ? VVAL_SDR : 1.0;
 
@@ -465,7 +521,9 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
             double pvo2 = pio2 - VVAL_O2_METABOLIC_BAR;
             if (pvo2 < VVAL_PVO2_BAR) pvo2 = VVAL_PVO2_BAR;
             double pvsat = pa_now - (pvo2 + VVAL_PVCO2_BAR + VVAL_PH2O_BAR);
-            double pcross = VVAL_PCROSS_FSW[i] * FSW2BAR;
+            /* sPBOVP: the published sets drop PBOVP to zero at the surface. */
+            double pbovp = depth_m <= 1e-9 ? VVAL_SPBOVP : VVAL_PBOVP;
+            double pcross = pbovp * FSW2BAR;
             double pvn2 = pvsat + pcross;
             double supersat = (s->pn2[i] + s->phe[i]) - pvsat;
 
@@ -480,7 +538,10 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
                 double k = (pin2 < s->pn2[i]) ? kdn2 : kn2;
                 s->pn2[i] += (pin2 - s->pn2[i]) * (1.0 - exp(-k * dtn));
             }
-            double khe = M_LN2 / (VVAL_HT_N2[i] / VVAL_HE_RATIO);
+            /* Unreachable - helium plans are refused on this model. Left
+             * on the nitrogen half-time so a stray trace cannot revive a
+             * scaling the data does not support. */
+            double khe = M_LN2 / VVAL_HT_N2[i];
             double kdhe = khe * sdr;
             if (pihe < s->phe[i] && supersat > pcross) {
                 double rate = kdhe * (pvn2 - pihe);
@@ -572,8 +633,7 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
 /* VPM-B — Yount/Hoffman varying permeability, Erik C. Baker's          */
 /* implementation. Ported from Baker's FORTRAN ("DISTRIBUTE FREELY -    */
 /* CREDIT THE AUTHORS") and cross-read against Subsurface core/deco.c.  */
-/* Validated against Baker's own VPM.OUT: see Reference/vpmb_ref.c and  */
-/* Reference/vpmb_validation.md.                                        */
+/* Validated against Baker's own VPM.OUT: see Reference/vpmb_ref.c.     */
 /*                                                                      */
 /* Baker computes the nucleus mechanics in Pascals with radii in metres.*/
 /* That is kept verbatim; conversion to bar happens only at the edges.  */
@@ -796,13 +856,12 @@ static double ceiling_bar(const sim *s) {
             /* Mix-weighted maximum permissible tension, the same weighting
              * Buhlmann uses for a and b. With phe = 0 this is exactly the
              * nitrogen value, so every air schedule is untouched. */
-            double m = (s->pn2[i] * VVAL_MPTT0_FSW[i] + s->phe[i] * VVAL_MPTT0_HE_FSW[i]) / pt;
-            /* Mix-weighted projection slope. D_ceil = (tension - MPTT0)/a, so
-             * the tolerated ambient is p_surface + (pt - MPTT0)/a. At
-             * pt = MPTT0 this is p_surface whatever a is — surfacing unchanged. */
-            double a = (s->pn2[i] * VVAL_SLOPE_N2 + s->phe[i] * VVAL_SLOPE_HE) / pt;
-            if (a < 0.05) a = 0.05;
-            double tol = s->p_surface + (pt - m * FSW2BAR) / a;
+            /* One MPTT table, applied to the compartment's TOTAL inert
+             * tension. There is no separate helium ceiling: the Navy publishes
+             * none for VVal-18, and the array that used to sit here was a
+             * byte-for-byte copy of this one. See Audit v2.2 and Research v2.3. */
+            double m = VVAL_MPTT0_FSW[i];
+            double tol = s->p_surface + (pt - m * FSW2BAR) / VVAL_SLOPE;
             if (tol > worst) worst = tol;
         }
         return worst;
@@ -879,6 +938,64 @@ static double gas_switch_depth(const sim *s, double to_m) {
         if (d > best) best = d;
     }
     return best;
+}
+
+/* ---- travel gas -------------------------------------------------------
+ *
+ * Only one question is being answered here: can the diver breathe the back
+ * gas where the dive starts? On a 10/50 the answer is no - 0.101 bar at the
+ * surface - and the plan has had him on it from the first second of the
+ * descent. The fix is the one a diver already carries the gas for: go down on
+ * the stage, swap to the back gas as soon as it is safe.
+ *
+ * "As soon as it is safe" is the same 0.18 bar floor the break-gas picker
+ * uses, evaluated at stop increments because that is the granularity a diver
+ * plans and a computer displays. On a 10/50 that lands on 9 m: 6 m is
+ * 0.162 bar and fails, 9 m is 0.192 and passes.
+ *
+ * The gas is chosen, not configured. The leanest carried mix that is
+ * breathable at the surface is what a diver would reach for, and it is also
+ * the one that costs the least in inert loading on the way down. It must also
+ * stay within the plan's own deco PO2 limit at the switch depth, so a rich
+ * stage cannot be pressed into service as a travel gas below its own MOD. */
+static bool travel_gas_needed(const sim *s, double wp_fo2) {
+    const zp_config *c = s->cfg;
+    if (!c->travel_gas || wp_fo2 <= 0) return false;
+    return s->p_surface * wp_fo2 < c->break_min_po2 - 1e-9;
+}
+
+/* Shallowest stop increment at which the back gas clears the floor. */
+static double travel_switch_depth(const sim *s, double wp_fo2, double stop_iv)
+{
+    const zp_config *c = s->cfg;
+    if (stop_iv < 1e-9) stop_iv = 3.0;
+    for (double d = stop_iv; d < 100.0; d += stop_iv)
+        if (pamb(s, d) * wp_fo2 >= c->break_min_po2 - 1e-9) return d;
+    return -1;
+}
+
+/* Leanest carried mix breathable at the surface and still inside the plan's
+ * deco PO2 limit at the switch depth. */
+static bool pick_travel_gas(const sim *s, double switch_m,
+                            double *tfo2, double *tfhe)
+{
+    const zp_config *c = s->cfg;
+    double pmax = c->oc_deco_max_po2 > 0 ? c->oc_deco_max_po2 : 1.6;
+    double best_fo2 = 2.0, best_fhe = 0.0; bool found = false;
+    for (int pass = 0; pass < 2; pass++) {
+        int n = pass == 0 ? c->n_oc_deco : c->n_wp;
+        for (int i = 0; i < n; i++) {
+            double fo2 = pass == 0 ? c->oc_deco_fo2[i] : c->wp[i].fo2;
+            double fhe = pass == 0 ? c->oc_deco_fhe[i] : c->wp[i].fhe;
+            if (pass == 1 && c->wp[i].cc) continue;
+            if (fo2 <= 0) continue;
+            if (s->p_surface * fo2 < c->break_min_po2 - 1e-9) continue;
+            if (pamb(s, switch_m) * fo2 / P_SEALEVEL > pmax + 1e-6) continue;
+            if (fo2 < best_fo2) { best_fo2 = fo2; best_fhe = fhe; found = true; }
+        }
+    }
+    if (found) { *tfo2 = best_fo2; *tfhe = best_fhe; }
+    return found;
 }
 
 /* Put the diver on the best gas here and note it in the plan. */
@@ -997,6 +1114,154 @@ static double display_ppo2(const sim *s, double depth_m) {
     double pa = pamb(s, depth_m) / P_SEALEVEL;   /* ATA, as the original */
     if (s->cc) return s->setpoint < pa ? s->setpoint : pa;
     return pa * s->fo2;
+}
+
+/* Subsurface's numbers, verbatim from core/planner.cpp:
+ *     BACKGAS_BREAK_O2_DURATION_SECONDS = 12 * 60
+ *     BACKGAS_BREAK_DURATION_SECONDS    =  6 * 60
+ * Twelve on, six off. Not the Navy's thirty and five, and deliberately so:
+ * the Subsurface mode reproduces their planner, the Navy mode is ours. */
+#define SUBSURF_O2_MIN     12.0
+#define SUBSURF_BREAK_MIN   6.0
+
+/* Break-gas selection is OURS in both modes, and deliberately not
+ * Subsurface's. Theirs is:
+ *
+ *   if (best_first_ascend_cylinder != -1 &&
+ *       get_o2(cyl[best_first_ascend_cylinder]) <= 320)
+ *       break_cylinder = best_first_ascend_cylinder;
+ *   else
+ *       break_cylinder = 0;
+ *
+ * The first-ascent gas if it is 32% or leaner, otherwise cylinder 0 - which on
+ * a normal trimix plan is the bottom mix. They have no minimum-PO2 guard, so
+ * on a 10/50 bottom gas that rule hands the diver 0.13 bar at the 3 m stop.
+ *
+ * A break is taken on a travel or stage gas, and a travel or stage gas is by
+ * definition one you can breathe at that depth. Both modes therefore use
+ * pick_break_gas, which takes the leanest carried mix still clearing
+ * break_min_po2 at the stop. Both modes also share one oxygen clock that
+ * carries across stops (v1.35.0; before that Subsurface mode reset it at
+ * every stop, as Subsurface itself does, which let a diver reach 49 minutes
+ * of continuous oxygen before the first break). What Subsurface mode keeps
+ * from Subsurface is the modelled gas exchange during the break. */
+
+static bool can_surface_from_increment(const sim *s, double inc_m);
+static bool can_leave(const sim *s, double to_m);
+
+/* Is the diver on the oxygen phase here? There is no FO2 trigger in the
+ * Navy's algorithm - the oxygen phase simply begins on arrival at a stop at
+ * or above O2CEIL, because the Navy diver switches to oxygen there and stays
+ * on it. We need something the planner can test for any gas plan, so the
+ * clock runs when the diver is at or above the ceiling AND breathing a mix at
+ * or above o2_trigger_fo2. Default 0.80, which takes in EAN80 and pure O2.
+ * Closed circuit is excluded: the setpoint, not a gas switch, controls it.
+ *
+ * The default is 1.00, so only pure oxygen qualifies. See zp_config_init. */
+static bool on_oxygen_phase(const sim *s, double depth_m) {
+    const zp_config *c = s->cfg;
+    if (c->air_break_mode == ZP_AB_OFF || s->cc) return false;
+    if (depth_m > c->o2_ceiling_m + 1e-9) return false;
+    return s->fo2 >= c->o2_trigger_fo2 - 1e-9;
+}
+
+/* The CNS condition. No depth ceiling, deliberately: o2_ceiling_m is an
+ * oxygen-deco depth rule and has nothing to say about a diver whose oxygen
+ * clock has run out at 21 m on EAN50. The trigger is the clock, so the only
+ * constraint left is that a usable break gas exists at that stop.
+ *
+ * Pure oxygen is excluded because on_oxygen_phase already covers it and two
+ * conditions driving one clock would double-count. Closed circuit is excluded
+ * because nothing here can plan a break against a setpoint; it is advised to
+ * lower the setpoint instead, once, in the stop loop. */
+static bool on_cns_phase(const sim *s) {
+    const zp_config *c = s->cfg;
+    if (c->air_break_mode == ZP_AB_OFF || s->cc) return false;
+    if (s->cns < c->cns_break_pct - 1e-9) return false;
+    return s->fo2 < c->o2_trigger_fo2 - 1e-9;
+}
+
+/* Either condition. The cadence is the same whichever fired it. */
+static bool break_phase(const sim *s, double depth_m) {
+    return on_oxygen_phase(s, depth_m) || on_cns_phase(s);
+}
+
+
+/* Is this mix breathable as a break gas at this depth? Two bounds, because
+ * "toxic" cuts both ways: too lean and the diver is hypoxic, too rich and the
+ * break is not a break. The floor is break_min_po2, default 0.18 bar. The
+ * ceiling is the plan's own deco PO2 limit, so a break gas is never allowed
+ * something the planner would refuse as a deco gas. */
+static bool break_gas_ok(const sim *s, double depth_m, double fo2) {
+    const zp_config *c = s->cfg;
+    double p = pamb(s, depth_m);
+    if (fo2 <= 0) return false;
+    if (fo2 >= s->fo2 - 1e-6) return false;               /* not leaner */
+    if (p * fo2 < c->break_min_po2 - 1e-9) return false;  /* hypoxic */
+    double pmax = c->oc_deco_max_po2 > 0 ? c->oc_deco_max_po2 : 1.6;
+    if (p * fo2 / P_SEALEVEL > pmax + 1e-6) return false; /* too rich */
+    return true;
+}
+
+/* The back gas: the mix carried at the deepest point of the dive. This is
+ * what a diver means by back gas, and on a trimix plan it is also the mix
+ * most likely to be hypoxic at a 6 m stop, which is the case the selection
+ * order below exists to handle. */
+static bool back_gas(const zp_config *c, double *fo2, double *fhe) {
+    double dmax = -1; int wmax = -1;
+    for (int w = 0; w < c->n_wp; w++)
+        if (c->wp[w].depth_m > dmax) { dmax = c->wp[w].depth_m; wmax = w; }
+    if (wmax < 0 || c->wp[wmax].cc || c->wp[wmax].fo2 <= 0) return false;
+    *fo2 = c->wp[wmax].fo2; *fhe = c->wp[wmax].fhe;
+    return true;
+}
+
+/* Break gas selection, in the order the diver would apply it.
+ *
+ *   1. The gas chosen in settings, if it is carried, leaner, and breathable
+ *      at this stop.
+ *   2. The back gas, if it is breathable at this stop. This is the classic
+ *      rule and it is what Subsurface calls a backgas break.
+ *   3. Otherwise the back gas is toxic here - hypoxic, on a normal trimix
+ *      plan - so fall back to the leanest carried deco or stage mix that
+ *      clears the floor. On a 10/50 plan with 36/10 and oxygen that is the
+ *      36/10, at 0.57 bar at 6 m and 0.47 at 3 m.
+ *
+ * Returns false if nothing qualifies, in which case no break is scheduled and
+ * the plan says so rather than handing the diver a gas he cannot breathe.
+ * `chosen_bad` reports a settings gas that had to be passed over. */
+static bool pick_break_gas(const sim *s, double depth_m,
+                           double *bfo2, double *bfhe, bool *chosen_bad)
+{
+    const zp_config *c = s->cfg;
+    if (chosen_bad) *chosen_bad = false;
+
+    if (c->break_gas_fo2 > 0) {
+        if (break_gas_ok(s, depth_m, c->break_gas_fo2)) {
+            *bfo2 = c->break_gas_fo2; *bfhe = c->break_gas_fhe;
+            return true;
+        }
+        if (chosen_bad) *chosen_bad = true;
+    }
+
+    double gfo2, gfhe;
+    if (back_gas(c, &gfo2, &gfhe) && break_gas_ok(s, depth_m, gfo2)) {
+        *bfo2 = gfo2; *bfhe = gfhe;
+        return true;
+    }
+
+    double best_fo2 = 2.0, best_fhe = 0.0; bool found = false;
+    for (int pass = 0; pass < 2; pass++) {
+        int n = pass == 0 ? c->n_oc_deco : c->n_wp;
+        for (int i = 0; i < n; i++) {
+            double fo2 = pass == 0 ? c->oc_deco_fo2[i] : c->wp[i].fo2;
+            double fhe = pass == 0 ? c->oc_deco_fhe[i] : c->wp[i].fhe;
+            if (!break_gas_ok(s, depth_m, fo2)) continue;
+            if (fo2 < best_fo2) { best_fo2 = fo2; best_fhe = fhe; found = true; }
+        }
+    }
+    if (found) { *bfo2 = best_fo2; *bfhe = best_fhe; }
+    return found;
 }
 
 /* pick best OC deco gas for a stop depth; returns index into cfg list
@@ -1178,6 +1443,87 @@ static bool can_leave(const sim *s, double to_m) {
 /* ------------------------------------------------------------------ */
 typedef struct { double depth; double time_min; } extra_stop;
 
+/* One oxygen break at this stop. Returns the minutes spent, 0 if none was
+ * taken. The elapsed-oxygen clock is reset either way, so a stop that cannot
+ * take a break does not immediately ask again. */
+static double run_air_break(sim *s, double here, zp_result *out,
+                            bool lst_do0, double gg, double stop_iv,
+                            double *seg_start, int *breaks_here)
+{
+    const zp_config *c = s->cfg;
+    double bfo2, bfhe; bool chosen_bad = false;
+    if (!pick_break_gas(s, here, &bfo2, &bfhe, &chosen_bad)) {
+        s->on_o2_min = 0;
+        if (!strstr(s->warn, "no leaner breathable gas"))
+            warn(s, "A break was due but no leaner breathable gas is carried "
+                    "at that depth; the break was skipped.");
+        return 0;
+    }
+    if (chosen_bad && !s->chosen_gas_warned) {
+        s->chosen_gas_warned = true;
+        warn(s, "The break gas chosen in settings is not breathable at the "
+                "break depth; the automatic choice was used instead.");
+    }
+    /* NEDU TR 07-09: "unless the diver was within five minutes of the last
+     * pull to surface". Probe it - run the break length again on oxygen, on a
+     * copy, and see whether the stop would already be over. out is detached so
+     * the probe cannot record anything. */
+    if (here <= c->last_stop_depth_m + 1e-9) {
+        sim probe = *s; probe.out = NULL;
+        double t = c->air_break_min;
+        while (t > 1e-9) { double dt = t < DT ? t : DT;
+                           tick(&probe, here, dt, false); t -= dt; }
+        bool done = lst_do0 ? can_surface_from_increment(&probe, stop_iv)
+                            : can_leave(&probe, gg);
+        if (done) { s->on_o2_min = 0; return 0; }
+    }
+    double o_fo2 = s->fo2, o_fhe = s->fhe;
+    s->fo2 = bfo2; s->fhe = bfhe;
+    /* Navy: inert exchange stops. Subsurface: it is an ordinary segment. */
+    s->freeze_inert = (c->air_break_mode == ZP_AB_NAVY);
+    double t = c->air_break_min;
+    while (t > 1e-9) { double dt = t < DT ? t : DT;
+                       tick(s, here, dt, false); t -= dt; }
+    s->freeze_inert = false;
+    /* The stop is printed in pieces: the oxygen time before the break, the
+     * break, then whatever oxygen time follows. Without this the report drew
+     * the pre-break oxygen time as an ascent leg, because the renderer infers
+     * travel from the gap between one line's runtime and the next line's
+     * arrival. */
+    if (out && out->n_lines < ZP_MAX_PLAN_LINES) {
+        double pre = (s->runtime - c->air_break_min) - *seg_start;
+        if (pre > 1e-9) {
+            zp_plan_line *P = &out->lines[out->n_lines++];
+            P->kind = ZP_LINE_NORMSTOP; P->depth_m = here;
+            P->stop_sec = pre * 60.0;
+            P->runtime_min = s->runtime - c->air_break_min;
+            P->fo2 = o_fo2; P->fhe = o_fhe; P->cc = s->cc;
+            P->setpoint = s->setpoint;
+            double keep_fo2 = s->fo2, keep_fhe = s->fhe;
+            s->fo2 = o_fo2; s->fhe = o_fhe;
+            P->ppo2 = display_ppo2(s, here);
+            P->end_m = end_m(s, here);
+            P->ead_m = ead_m(s, here);
+            s->fo2 = keep_fo2; s->fhe = keep_fhe;
+        }
+    }
+    if (out && out->n_lines < ZP_MAX_PLAN_LINES) {
+        zp_plan_line *L = &out->lines[out->n_lines++];
+        L->kind = ZP_LINE_AIRBREAK; L->depth_m = here;
+        L->stop_sec = c->air_break_min * 60.0;
+        L->runtime_min = s->runtime;
+        L->fo2 = bfo2; L->fhe = bfhe; L->cc = false; L->setpoint = 0;
+        L->ppo2 = display_ppo2(s, here);
+        L->end_m = end_m(s, here);
+        L->ead_m = ead_m(s, here);
+    }
+    s->fo2 = o_fo2; s->fhe = o_fhe;
+    s->on_o2_min = 0;
+    *seg_start = s->runtime;
+    (*breaks_here)++;
+    return c->air_break_min;
+}
+
 static double round_to_stop(double d, double interval) {
     double n = ceil(d / interval - 1e-9);
     return n * interval;
@@ -1196,9 +1542,6 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         pow(1.0 - 2.25577e-5 * cfg->altitude_m, 5.25588);
     s->bar_per_m = (cfg->salt_water ? RHO_SALT : RHO_FRESH) * G_ACC / 1e5;
     s->n2a = N2_A_C;            /* v1.5: ZHL-16C only */
-    vval_pcross_env();
-    vval_mptt_he_env();
-    vval_slope_env();
     s->ncomp = IS_VVAL(cfg) ? VVAL_NC
              : IS_VPM(cfg)  ? VPM_NC
              : (cfg->use_1b ? ZP_COMPARTMENTS : ZP_COMPARTMENTS - 1);
@@ -1262,46 +1605,47 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         s->phe[i] = cfg->have_initial_tissues ? cfg->init_phe[i] : 0.0;
     }
     s->cns = cfg->have_initial_tissues ? cfg->init_cns_pct : 0.0;
+    s->cns_armed = false;
+    s->cc_cns_warned = false;
+    s->chosen_gas_warned = false;
 
-    /* VVAL-79 is a NITROGEN model. There is no published Navy helium
-     * parameter set for it: the Surface-Supplied He-O2 table in the Diving
-     * Manual Rev 7 Change A is an edited 1939 table, not model-derived, and
-     * NEDU's replacement work (Twenty-First Century Surface-Supplied Heliox
-     * Decompression Table Development) uses a different probabilistic
-     * linear-exponential model and recommends the MK 16 MOD 1 table instead.
+    /* VVal-79 is nitrogen-only, and helium is REFUSED rather than modelled.
      *
-     * The helium handling here — half-times scaled by sqrt(28/4), a mix-weighted
-     * MPTT and projection slope — is this engine's own extrapolation and has no
-     * reference to be validated against.
+     * The Navy publishes no helium parameters for the Thalmann algorithm that
+     * pair with a nitrogen set, and nothing published says how two inert gases
+     * share one compartment. The engine used to run helium here on the
+     * nitrogen half-times divided by sqrt(28/4) - Graham's law, applied a
+     * priori, which NEDU's own fitted data contradicts: in the fastest
+     * LEM-he8n25 compartment helium is SLOWER than nitrogen (10.4 min against
+     * 3.29), and direct measurement in fast-exchange tissues shows "no
+     * difference in the exchange rates for nitrogen and helium" (NEDU
+     * TR 15-04, TR 02-10).
      *
-     * The total time is NO LONGER the thing to warn about. Since 1.12.0 (linear
-     * rate, SDR, venous crossover) and 1.14/1.15 (helium slope and MPTT), VVAL-79
-     * trimix runs LONGER than VPM-B, not shorter — measured across 45-90 m on
-     * 21/35 through 13/55, it exceeds VPM-B at nominal conservatism every time.
-     * The warning used to say the opposite; that dated from 1.12.0 and was left
-     * standing after the helium work made it false.
-     *
-     * What is still wrong is the SHAPE. VVAL-79 has neither gradient factors nor
-     * a bubble term, so nothing pulls its first stop deep on a helium mix: on
-     * 80 m / 27 min with 15/45 it first stops at 33 m where VPM-B stops at 51 m.
-     * That is the caution worth giving, and it is now the one given. */
+     * A schedule computed on an assumption its own laboratory disproved is
+     * worse than no schedule, because it looks like an answer. The plan is
+     * refused and the diver is sent to a model that handles helium. */
     if (IS_VVAL(cfg)) {
+        bool any_he = false;
         for (int w = 0; w < cfg->n_wp; w++)
-            if (cfg->wp[w].fhe > 0.001) {
-                warn(s, "VVAL-79 is a nitrogen model: the U.S. Navy publishes no "
-                        "helium parameters for it, and the helium handling here is "
-                        "this project's own unvalidated extrapolation. It begins "
-                        "decompression far shallower on helium than a bubble model "
-                        "does. Use VPM-B, or ZHL16-C with gradient factors, for "
-                        "trimix.");
-                break;
-            }
+            if (cfg->wp[w].fhe > 0.001) any_he = true;
+        for (int i = 0; i < cfg->n_oc_deco; i++)
+            if (cfg->oc_deco_fhe[i] > 0.001) any_he = true;
+        if (any_he) {
+            warn(s, "VVAL-79 plans air and nitrox only. This dive carries "
+                    "helium, and the U.S. Navy publishes no helium parameters "
+                    "for the Thalmann algorithm, so no schedule has been "
+                    "computed. Use VPM-B, or ZHL-16C with gradient factors, "
+                    "for trimix.");
+            out->n_lines = 0;
+            out->refused = true;
+            return 0;
+        }
     }
     if (cfg->have_initial_tissues && cfg->surface_interval_min > 0) {
         double t = cfg->surface_interval_min;
         for (int i = 0; i < s->ncomp; i++) {
             double htn = IS_VVAL(cfg) ? VVAL_HT_N2[i] : N2_HT[i];
-            double hth = IS_VVAL(cfg) ? VVAL_HT_N2[i]/VVAL_HE_RATIO : HE_HT[i];
+            double hth = IS_VVAL(cfg) ? VVAL_HT_N2[i] : HE_HT[i];
             /* Decays toward the DIVE SITE's equilibrium, not sea level's: the
              * surface interval is spent at altitude, breathing the thin air
              * there. pn2_alt, not pn2_sea. */
@@ -1341,7 +1685,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         }
     }
 
-    /* v1.8.1: the two VVAL-18 notes ("gradient factors ignored" and "helium
+    /* v1.8.1: the two VVAL-79 notes ("gradient factors ignored" and "helium
      * halftimes are an unvalidated approximation") are suppressed at the owner's
      * request, matching the personal-use policy already applied to the legal
      * disclaimer boilerplate. The underlying caveats still stand and are
@@ -1362,6 +1706,37 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         const zp_waypoint *wp = &cfg->wp[w];
         bool going_deeper = wp->depth_m > s->depth;
         if (going_deeper) {
+            /* Travel gas: only on the way in from the surface, and only when
+             * the back gas cannot be breathed there. See travel_gas_needed. */
+            double tfo2 = 0, tfhe = 0, swm = -1;
+            double siv = cfg->stop_distance_m > 0 ? cfg->stop_distance_m : 3.0;
+            bool use_travel = false;
+            if (w == 0 && s->depth < 1e-9 && !wp->cc &&
+                travel_gas_needed(s, wp->fo2)) {
+                swm = travel_switch_depth(s, wp->fo2, siv);
+                if (swm > 0 && swm < wp->depth_m - 1e-9 &&
+                    pick_travel_gas(s, swm, &tfo2, &tfhe))
+                    use_travel = true;
+                else
+                    warn(s, "Travel gas is on and the back gas is hypoxic at "
+                            "the surface, but no carried mix is breathable "
+                            "there; the descent starts on the back gas.");
+            }
+            if (use_travel) {
+                s->fo2 = tfo2; s->fhe = tfhe;
+                s->cc = false; s->setpoint = 0;
+                travel(s, swm, false);
+                if (out && out->n_lines < ZP_MAX_PLAN_LINES) {
+                    zp_plan_line *L = &out->lines[out->n_lines++];
+                    L->kind = ZP_LINE_TRAVELGAS; L->depth_m = swm;
+                    L->stop_sec = 0; L->runtime_min = s->runtime;
+                    L->fo2 = tfo2; L->fhe = tfhe; L->cc = false;
+                    L->setpoint = 0;
+                    L->ppo2 = display_ppo2(s, swm);
+                    L->end_m = end_m(s, swm);
+                    L->ead_m = ead_m(s, swm);
+                }
+            }
             /* switch on leaving previous waypoint */
             s->fo2 = wp->fo2; s->fhe = wp->fhe;
             s->cc = wp->cc; s->setpoint = wp->setpoint;
@@ -1494,7 +1869,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
          * MultiDeco's 48 m on 70 m / 26 min with 18/45, and unmoved by any
          * amount of conservatism, which is the giveaway. The first stop also
          * anchors Boyle compensation, so getting it wrong propagates through
-         * every stop above it. Buhlmann and VVAL-18 keep the climbing rule. */
+         * every stop above it. Buhlmann and VVAL-79 keep the climbing rule. */
         if (IS_VPM(cfg) && vpm_first_stop < -0.5) {
             double cd = (ceiling_bar(s) - s->p_surface) / s->bar_per_m;
             if (cd > 1e-9) {
@@ -1590,6 +1965,12 @@ static int run_plan(const zp_config *cfg, zp_result *out,
 
         double arrive_rt = s->runtime;   /* for whole-minute rounding below */
         double stop_time = 0;
+        /* oxygen-break bookkeeping for this stop */
+        double seg_start = arrive_rt;
+        int    breaks_here = 0;
+        /* Subsurface only: is the diver currently parked on the break gas,
+         * owing a switch back to oxygen? Declared per stop, which is exactly
+         * why their break interval resets at every stop. */
         bool at_last = (here <= last_stop + 1e-9);
         double gg = at_last ? 0
                   : (here - stop_iv < last_stop ? last_stop : here - stop_iv);
@@ -1625,9 +2006,47 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         while (((lst_do0 ? !can_surface_from_increment(s, stop_iv)
                          : !can_leave(s, gg)) || stop_time < min_time - 1e-9)
                && stop_time < 24.0*60.0) {
+            /* One oxygen clock for both modes. It carries across stop
+             * changes and excludes travel, per NEDU TR 07-09, so "break
+             * after N" always means N minutes of cumulative oxygen. The
+             * modes differ only in how the break itself is integrated: Navy
+             * freezes inert exchange for its length, Subsurface runs it as
+             * an ordinary segment on the break gas. A break never straddles
+             * a stop change because it is run to completion here. */
+            /* Closed circuit: do nothing to the schedule. A break against a
+             * setpoint means dropping the setpoint or bailing out, and that is
+             * the diver's decision, not something a planner should invent. Say
+             * it once and carry on. */
+            if (s->cc && cfg->air_break_mode != ZP_AB_OFF &&
+                s->cns >= cfg->cns_break_pct - 1e-9 && !s->cc_cns_warned) {
+                s->cc_cns_warned = true;
+                char m[224];
+                snprintf(m, sizeof m,
+                         "CNS reached %.0f%% on closed circuit. No break is "
+                         "planned: lower the setpoint to reduce the oxygen "
+                         "exposure.", cfg->cns_break_pct);
+                warn(s, m);
+            }
+            /* The CNS condition arms hot. The oxygen clock has been sitting
+             * at zero because the gas rule was not running it, and making the
+             * diver wait a further oxygen period after the CNS limit is
+             * already reached would put the first break somewhere the dive may
+             * never get to. After that the ordinary cadence takes over. */
+            if (on_cns_phase(s) && !s->cns_armed) {
+                s->cns_armed = true;
+                if (s->on_o2_min < cfg->o2_period_min)
+                    s->on_o2_min = cfg->o2_period_min;
+            }
+            if (break_phase(s, here) &&
+                s->on_o2_min >= cfg->o2_period_min - 1e-9) {
+                double bt = run_air_break(s, here, out, lst_do0, gg, stop_iv,
+                                          &seg_start, &breaks_here);
+                if (bt > 1e-9) { stop_time += bt; continue; }
+            }
             double t = quantum;
             while (t > 1e-9) { double dt = t<DT?t:DT; tick(s,s->depth,dt,false); t-=dt; }
             stop_time += quantum;
+            if (break_phase(s, here)) s->on_o2_min += quantum;
             /* once the model itself is satisfied, further time is extra-slow */
         }
 
@@ -1649,7 +2068,17 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             double pad = want - total;
             while (pad > 1e-9) { double dt = pad<DT?pad:DT; tick(s,s->depth,dt,false); pad-=dt; }
             stop_time += (want - total);
-            out->total_deco_min += (want - total);
+            /* The pad is already part of stop_time, which is added to
+             * total_deco_min below along with the rest of the stop. Adding it
+             * here as well counted every padded stop twice, which is why
+             * TOTAL DECO TIME drifted upward as the number of stops grew:
+             * +1:31 over twelve stops, +3:31 over fourteen. TOTAL DECO TIME is
+             * now exactly the sum of the stop times the planner held.
+             *
+             * Note this is NOT the same quantity as the sum of the printed
+             * stop column: that column folds the short ascent leg into the
+             * stop it leads to (see the fold logic in zp_report), so it reads
+             * higher by the total of those legs. The two were never equal. */
         }
         if (stop_time > 1e-9 && first_norm < 0) first_norm = here;
         /* decozone_start_m used to be assigned here, from the first stop that
@@ -1661,7 +2090,10 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             norm_idx = out->n_lines;
             zp_plan_line *L = &out->lines[out->n_lines++];
             L->kind = ZP_LINE_NORMSTOP; L->depth_m = here;
-            L->stop_sec = stop_time * 60.0;
+            /* With a break at this stop, earlier pieces have already been
+             * printed; this line carries only what follows the last one.
+             * TOTAL DECO TIME still takes the whole stop_time below. */
+            L->stop_sec = (breaks_here ? (s->runtime - seg_start) : stop_time) * 60.0;
             L->runtime_min = s->runtime;
             L->fo2 = s->fo2; L->fhe = s->fhe; L->cc = s->cc;
             L->setpoint = s->setpoint;
@@ -1719,6 +2151,44 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     }
     out->runtime_min = s->runtime;
     out->cns_pct = s->cns;
+
+    /* CNS advisory. Two tiers off one number, and the number is the whole
+     * dive's total, which is also its maximum: CNS does not decay in the
+     * water. ZPlan, Subsurface and Abysner all accumulate in-dive and decay
+     * only on the surface (Design Spec v1.5 section 1.3), so the value at the
+     * end of the dive is the highest the diver ever reached.
+     *
+     * 100% is the NOAA single-exposure limit. 80% is not a published number:
+     * it is the point at which a plan has spent most of its allowance and a
+     * small change - a longer bottom time, a deeper stop, a richer deco mix -
+     * takes it over. Warning there gives the diver somewhere to go.
+     *
+     * Advisory only, exactly like the gas density lines below. It changes no
+     * schedule. There is nothing a planner can do about an oxygen exposure
+     * except say so: an air break lowers the rate of accrual for a few
+     * minutes and cannot bring a diver back under a limit already passed,
+     * because the clock never runs backwards in the water.
+     *
+     * It applies to open and closed circuit alike - the CNS total is the CNS
+     * total, whatever produced it - and the closed-circuit case is the one
+     * where it matters most, since a constant setpoint holds the accrual rate
+     * flat through the whole ascent instead of letting it fall with depth. */
+    if (out->cns_pct >= CNS_LIMIT_PCT - 1e-9) {
+        char m[224];
+        snprintf(m, sizeof m,
+                 "CNS %.0f%% reaches or exceeds the 100%% NOAA single-exposure "
+                 "limit. Reduce the bottom time, lower the deco PO2, or extend "
+                 "the surface interval before diving this plan.", out->cns_pct);
+        warn(s, m);
+    } else if (out->cns_pct >= CNS_WARN_PCT - 1e-9 && !s->cc_cns_warned) {
+        /* the closed-circuit advice above already made this point */
+        char m[224];
+        snprintf(m, sizeof m,
+                 "CNS %.0f%% is above %.0f%% of the NOAA single-exposure limit. "
+                 "Little margin is left for a longer bottom time or a richer "
+                 "deco mix.", out->cns_pct, CNS_WARN_PCT);
+        warn(s, m);
+    }
     out->otu = s->otu;
     out->n_gas_used = s->n_gas;
     out->total_oc_l = 0;
@@ -1854,8 +2324,7 @@ int zp_plan(const zp_config *cfg, zp_result *out) {
      * phase volume time changes by one minute or less in any one compartment.
      *
      * Note this differs by about two minutes from Baker's own VPM.EXE on the
-     * 80 msw benchmark, which stops after a single relaxation. See
-     * Reference/vpmb_validation.md. */
+     * 80 msw benchmark, which stops after a single relaxation. */
     vpm_clear();
     double last_pvt[VPM_NC];
     for (int i = 0; i < VPM_NC; i++) last_pvt[i] = 0.0;
@@ -1888,7 +2357,6 @@ void zp_config_init(zp_config *cfg) {
     memset(cfg, 0, sizeof *cfg);
     cfg->metric_output = false;
     cfg->salt_water = true;
-    cfg->use_b_values = false;
     /* Not equilibrated, arrived just now. The conservative end, chosen as the
      * default because it is the common case - the diver who drives up to the
      * lake in the morning - and because the other end understates the
@@ -1907,6 +2375,35 @@ void zp_config_init(zp_config *cfg) {
     cfg->deco_rmv_l_min = 0.6 * L_PER_CUFT;
     cfg->oc_deco_max_po2 = 1.55;
     cfg->max_end_m = 130 / FT_PER_M;
+    /* Oxygen breaks: off. When switched on the defaults are the US Navy's,
+     * from VVal-79 Appendix B and the Air/O2 procedure in NEDU TR 07-09:
+     * 30 minutes on oxygen, 5 on the break gas, starting at the first stop at
+     * or above 30 fsw. The 0.18 bar floor is ours, not theirs - the Navy
+     * breaks on air and never has to ask whether the break gas is breathable,
+     * but a trimix diver's back gas at 3 m is hypoxic. */
+    cfg->air_break_mode  = ZP_AB_OFF;
+    cfg->o2_period_min   = 30.0;
+    cfg->air_break_min   = 5.0;
+    cfg->o2_ceiling_m    = 6.0;               /* oxygen deco depth */
+    cfg->break_min_po2   = 0.18;
+    cfg->cns_break_pct   = 80.0;
+    cfg->break_gas_fo2   = 0.0;   /* automatic */
+    cfg->break_gas_fhe   = 0.0;
+    cfg->travel_gas      = false;
+    /* PURE OXYGEN ONLY. This is what Subsurface tests for
+     * (get_o2(...) == 1000) and what the training agencies teach, and the
+     * reason is the CNS rate rather than tradition. At 6 m, 100% O2 runs
+     * 2.05 %/min against EAN80's 0.54 - very nearly four times - so a single
+     * 30-minute oxygen period at 6 m costs 61% CNS where the same half hour on
+     * EAN80 costs 16%. The Navy's 30-minute period was sized around the former.
+     * A 70 m trimix dive finishing on EAN80 at 9, 6 and 3 m totals about 54%
+     * CNS with no stop dominating, so breaks there cost decompression time and
+     * buy nothing.
+     *
+     * Left configurable rather than hardcoded, so 0.80 stays reachable for
+     * anyone who wants the Navy's modelled inspired O2 fraction, but nobody
+     * gets breaks on a rich nitrox by accident. */
+    cfg->o2_trigger_fo2  = 1.00;
 }
 
 static bool truthy(const char *v) { return *v=='y'||*v=='Y'||*v=='1'; }
@@ -1991,7 +2488,7 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 v2l = metric ? 1.0 : L_PER_CUFT;
             }
             else if (!strcmp(key, "saltwater")) cfg->salt_water = truthy(val);
-            else if (!strcmp(key, "usebvalues")) { /* v1.5: ZHL-16C only */ }
+            else if (!strcmp(key, "usebvalues")) { /* removed in v1.34.0 */ }
             else if (!strcmp(key, "debuglevel")) { /* ignored */ }
             else if (!strcmp(key, "altitude")) cfg->altitude_m = atof(val) * d2m;
             else if (!strcmp(key, "altitudeequil"))
@@ -2046,10 +2543,29 @@ int zp_parse_profile(const char *text, zp_config *cfg,
             }
             else if (!strcmp(key, "gflow"))  { cfg->gf_lo = atof(val) > 1.0 ? atof(val)/100.0 : atof(val); cfg->use_gf = true; }
             else if (!strcmp(key, "model")) {
-                if (!strncmp(val, "vval", 4)) cfg->use_vval = ZP_MODEL_VVAL;
-                else if (!strncmp(val, "vpm", 3)) cfg->use_vval = ZP_MODEL_VPMB;
-                else cfg->use_vval = ZP_MODEL_BUHLMANN;  /* any Buhlmann -> ZHL-16C */
-                cfg->use_b_values = false;
+                /* Case-folded before matching. This used to compare the raw
+                 * string, so a capitalised model name fell through the chain and
+                 * silently selected Buhlmann - a different decompression model,
+                 * with nothing on the plan to say so. Capitalisation is exactly
+                 * how a person writes a model name. */
+                char v[32]; strncpy(v, val, sizeof v - 1); v[sizeof v - 1] = 0;
+                trim(v);
+                for (char *q = v; *q; q++) *q = (char)tolower((unsigned char)*q);
+                /* "vval", "vval79", and the retired "vval18"/"vval18m"
+                 * spellings from saved profiles all select VVal-79. */
+                if (!strncmp(v, "vval", 4)) cfg->use_vval = ZP_MODEL_VVAL79;
+                else if (!strncmp(v, "vpm", 3)) cfg->use_vval = ZP_MODEL_VPMB;
+                else {
+                    cfg->use_vval = ZP_MODEL_BUHLMANN;
+                    /* Anything unrecognised still lands on ZHL-16C, because a
+                     * planner must produce a schedule. But it no longer does so
+                     * in silence: a typo in this line changes the model. */
+                    if (strncmp(v, "buhl", 4) && strncmp(v, "zhl", 3) &&
+                        strncmp(v, "z16", 3) && *v && err)
+                        snprintf(err, errlen,
+                                 "line %d: unknown model '%s'; using Buhlmann "
+                                 "ZHL-16C", lineno, val);
+                }
             }
             else if (!strcmp(key, "rmvmetric")) cfg->rmv_metric = truthy(val) ? 1 : 0;
             /* v1.23.0: the experimental extra-slow ascent rule was removed.
@@ -2111,15 +2627,39 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 double v = atof(val);
                 cfg->icd_warn_bar = (v >= 0 && v <= 3.0) ? v : 0.0;
             }
-            else if (!strcmp(key, "heslope")) {
-                double v = atof(val);
-                if (v >= 0.2 && v <= 1.5) VVAL_SLOPE_HE = v;
+            /* v1.32.0: HeSlope and HeMptt are accepted and ignored. They drove
+             * a per-gas MPTT slope and a helium MPTT table that were never
+             * filled in - the array was a copy of the nitrogen one - and both
+             * are gone with the published nine-compartment set. */
+            else if (!strcmp(key, "heslope")) { /* removed in v1.32.0 */ }
+            else if (!strcmp(key, "hemptt"))  { /* removed in v1.32.0 */ }
+            else if (!strcmp(key, "airbreaks")) {
+                /* "n"/"off" | "navy" | "subsurface"|"modelled"|"modeled" */
+                char v[32]; strncpy(v, val, sizeof v - 1); v[31] = 0; trim(v);
+                for (char *q = v; *q; q++) *q = (char)tolower((unsigned char)*q);
+                if (!strcmp(v, "navy") || !strcmp(v, "deadtime"))
+                    cfg->air_break_mode = ZP_AB_NAVY;
+                else if (!strcmp(v, "subsurface") || !strcmp(v, "modelled")
+                         || !strcmp(v, "modeled"))
+                    cfg->air_break_mode = ZP_AB_SUBSURFACE;
+                else if (truthy(val)) cfg->air_break_mode = ZP_AB_NAVY;
+                else cfg->air_break_mode = ZP_AB_OFF;
             }
-            else if (!strcmp(key, "hemptt")) {
-                double v = atof(val);
-                if (v >= 0.5 && v <= 2.5)
-                    for (int i = 0; i < VVAL_NC; i++)
-                        VVAL_MPTT0_HE_FSW[i] = VVAL_MPTT0_FSW[i] * v;
+            else if (!strcmp(key, "o2period")) cfg->o2_period_min = atof(val);
+            else if (!strcmp(key, "airbreaktime")) cfg->air_break_min = atof(val);
+            else if (!strcmp(key, "o2ceiling")) cfg->o2_ceiling_m = atof(val) * d2m;
+            else if (!strcmp(key, "breakminpo2")) cfg->break_min_po2 = atof(val);
+            else if (!strcmp(key, "o2triggerfo2")) cfg->o2_trigger_fo2 = atof(val);
+            else if (!strcmp(key, "cnsbreakpct")) cfg->cns_break_pct = atof(val);
+            else if (!strcmp(key, "travelgas")) cfg->travel_gas = truthy(val);
+            else if (!strcmp(key, "breakgas")) {
+                double a = 0, b = 0;
+                int nf = sscanf(val, "%lf/%lf", &a, &b);
+                if (nf >= 1 && a > 0) {
+                    cfg->break_gas_fo2 = a > 1.0 ? a / 100.0 : a;
+                    cfg->break_gas_fhe = (nf == 2 && b > 0)
+                                       ? (b > 1.0 ? b / 100.0 : b) : 0.0;
+                } else { cfg->break_gas_fo2 = 0; cfg->break_gas_fhe = 0; }
             }
             else if (!strcmp(key, "usedecosetpoint")) cfg->use_deco_setpoint = truthy(val);
             else if (!strcmp(key, "decosetpoint")) {
@@ -2188,8 +2728,16 @@ int zp_report(const zp_config *cfg, const zp_result *res,
     const char *du = metric ? "m" : "ft";
 
     APP("                          v%s\n", zp_version());
+    if (res->refused) {
+        /* No schedule was computed. Print the header, then the reason, and
+         * nothing that could be mistaken for a plan. */
+        APP("              U.S. Navy EL-DCM (VVAL-79)\n\n");
+        APP("                     NO PLAN COMPUTED\n\n");
+        if (res->warnings[0]) APP("%s", res->warnings);
+        return (int)off;
+    }
     if (IS_VVAL(cfg))
-        APP("              U.S. Navy EL-DCM (VVAL-18)\n\n");
+        APP("              U.S. Navy EL-DCM (VVAL-79)\n\n");
     else if (IS_VPM(cfg))
         APP("        VPM-B  (Yount/Hoffman, Baker)  conservatism %d\n\n",
             cfg->vpm_conservatism);
@@ -2260,7 +2808,7 @@ int zp_report(const zp_config *cfg, const zp_result *res,
             /* fold short inter-stop ascents without a gas switch */
             /* Short inter-stop ascents are normally folded into the stop
              * that follows, which is the MultiDeco convention and matches how
-             * ZHL-16C and VVAL-18 have always been reported.
+             * ZHL-16C and VVAL-79 have always been reported.
              *
              * VPM-B does not fold. Baker's engine already absorbs the travel
              * leg by rounding the run time up on ARRIVAL, so folding it a
@@ -2279,6 +2827,31 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                     L->depth_m * dscale, du, tm, ts2,
                     ceil(arrive - 1e-6),
                     (descending && gas_changed) ? gas : "");
+            }
+            if (L->kind == ZP_LINE_AIRBREAK) {
+                /* Same columns as a stop. It IS stop time: the diver is at
+                 * depth for it and it counts toward TOTAL DECO TIME. What it
+                 * does not do, in Navy mode, is buy any decompression. */
+                double hold = L->stop_sec / 60.0;
+                int bm = (int)hold, bs = (int)((hold - bm) * 60 + 0.5);
+                if (bs == 60) { bm++; bs = 0; }
+                APP(" %s %5.0f%-2s %3d:%02d %6.0f   %-9s %4.2f %4.0f%-2s\n",
+                    "Break", L->depth_m * dscale, du, bm, bs,
+                    ceil(L->runtime_min - 1e-6), gas,
+                    L->ppo2, L->ead_m * dscale, du);
+                prev_end = L->runtime_min; prev_depth = L->depth_m;
+                pfo2 = L->fo2; pfhe = L->fhe; pcc = (int)L->cc; psp = L->setpoint;
+                continue;
+            }
+            if (L->kind == ZP_LINE_TRAVELGAS) {
+                /* Nothing of its own to print. Its whole job is to break the
+                 * descent into two legs, and the arrow row above has already
+                 * drawn the first one and named the travel gas it was made on;
+                 * the next arrow row names the back gas. A separate marker row
+                 * would say the same thing twice. */
+                prev_end = L->runtime_min; prev_depth = L->depth_m;
+                pfo2 = L->fo2; pfhe = L->fhe; pcc = (int)L->cc; psp = L->setpoint;
+                continue;
             }
             if (L->kind == ZP_LINE_GASSWITCH) {
                 /* Same columns as a stop, marked Gas and carrying no time. */
@@ -2326,7 +2899,9 @@ int zp_report(const zp_config *cfg, const zp_result *res,
     else if (res->decozone_start_m > 0) APP("\n");
     {   /* clamp: ceil(0 - 1e-6) is -0.0, which printf renders as "-0 minutes" */
         double deco = ceil(res->total_deco_min - 1e-6);
-        if (deco < 0) deco = 0;
+        /* ceil(0 - 1e-6) is -0.0, and -0.0 < 0 is FALSE, so the old test
+         * let it through and printf rendered "-0 minutes". */
+        if (!(deco > 0)) deco = 0;
         APP("\nTOTAL DECO TIME: %.0f minutes.\n", deco);
     }
     APP("DIVE RUN TIME: %.0f minutes.\n", ceil(res->runtime_min - 1e-6));

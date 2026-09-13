@@ -110,11 +110,11 @@ extension Color {
 // MARK: - Disclaimer
 
 /// Shown by the Info button and reproduced in the documentation of every build.
-/// `algorithms` names the models the build actually ships, so Lplanner79 says
-/// VVAL-79 rather than VVAL-18.
+/// `algorithms` names the models the build actually ships, so Lplanner says
+/// VVAL-79 not VVAL-18.
 public struct Disclaimer {
     public static var algorithms =
-        "A. A. Buhlmann's algorithm, the VVAL-18 algorithm, or the VPM-B algorithm"
+        "A. A. Buhlmann's algorithm, the VVAL-79 algorithm, or the VPM-B algorithm"
 
     public static var text: String {
         "This generated dive schedule could indirectly kill you and probably has "
@@ -152,8 +152,9 @@ public struct Manual {
     there — its two numbers are set in Config.
 
     CONFIG
-    Units, water, altitude, model, gradient factors, deep stops, ascent and \
-    descent rates, RMVs. Each section carries its own explanation.
+    Units, water, altitude, model, gradient factors, deep stops, air breaks, \
+    ascent and descent rates, deco gas limits, RMVs. Config itself is a plain \
+    list of controls; every setting is explained under CONFIG SETTINGS below.
 
     SURFACE INTERVAL AND RESIDUAL GAS
     When you surface, press "Next dive" to carry your inert gas loading \
@@ -205,6 +206,106 @@ public struct Manual {
     If you feel unwell after a dive, breathe oxygen and call the DAN \
     emergency line for your region. Symptoms that appear hours later are \
     still decompression illness.
+    """
+}
+
+// MARK: - Help menu
+
+/// The Help menu is built in the App scene and the manual is presented by the
+/// planner view, and on the macOS 12 deployment target a Commands block has no
+/// way to reach a view's state. This is the wire between the two.
+public final class HelpBus: ObservableObject {
+    public static let shared = HelpBus()
+    @Published public var showManual = false
+    private init() {}
+}
+
+/// Replaces the stock "Lplanner Help", which opened a help book that was never
+/// written and reported "Help isn't available for Lplanner". On iOS the help
+/// command group does not exist, so this resolves to nothing and is harmless.
+public struct ZPlannerHelpCommands: Commands {
+    public init() {}
+    public var body: some Commands {
+        CommandGroup(replacing: .help) {
+            Button("Lplanner Manual") { HelpBus.shared.showManual = true }
+                .keyboardShortcut("?", modifiers: [.command])
+        }
+    }
+}
+
+// MARK: - Config guide
+
+/// Every Config setting, explained. Config itself carries no prose: it is a
+/// list of controls, and the explanations live here, where they can be read
+/// end to end instead of a paragraph at a time between two pickers.
+/// Kept word-for-word identical to `ConfigGuide` in Disclaimer.kt.
+public struct ConfigGuide {
+    public static let text = """
+    Every setting in Config, in the order the sections appear. Nothing here changes a dive on its own: it changes how the planner computes one.
+
+    UNITS
+    Depths sets the units for depth, altitude, stop distance, END, ascent and descent rates, and the dive levels themselves. Every value already entered is converted when you switch, and the plan is then computed in those units — a 10 ft stop grid is a grid of whole feet. RMVs sets the units for breathing-rate and gas-consumption figures; it follows Depths until you set it yourself, after which it stays where you put it.
+
+    ENVIRONMENT
+    Fresh or salt water changes the depth-to-pressure conversion. O2 Narcotic controls whether oxygen counts as narcotic when calculating equivalent narcotic depths (ENDs).
+
+    MODEL
+    ZHL16-C is the Bühlmann set used here.
+
+    VVAL-79 is the U.S. Navy Thalmann EL-DCM (exponential uptake, linear elimination) with the VVal-79 air parameter set behind the Diving Manual Revision 7 air tables. It plans AIR AND NITROX ONLY: the Navy publishes no helium parameters for it, so a dive carrying helium is refused rather than computed.
+
+    VPM-B is the Yount/Hoffman varying permeability bubble model in Erik Baker's implementation. It limits the volume of gas released from bubble nuclei rather than the tension dissolved in tissue, which is why it puts the first stop much deeper, especially on helium mixes.
+
+    Gradient factors and Conservatism apply to ZHL16-C only; VVAL-79 has neither, and VPM-B has its own conservatism ladder. With gradient factors enabled, Pyle deep stops are disabled — GF Low provides the deep-stop function — and Conservatism is ignored.
+
+    VPM-B
+    Conservatism 0–4 scales both critical radii: a larger nucleus is excited by a smaller gradient, so higher levels give more decompression. Level 0 is Baker's nominal VPM-B and is the setting that reproduces his published reference schedule. The critical radii are the parameter that actually differs between implementations — Baker ships 0.6 and 0.5 microns, Subsurface 0.55 and 0.45. Changing them takes you outside the validated envelope, so leave them alone unless you are deliberately comparing against another planner.
+
+    ALTERNATIVE GRADIENT FACTORS
+    A second GF pair, used instead of the main pair whenever altGF is checked on the main screen. Set these to whatever you like — any values are accepted, low and high independently, and they need not bracket the main pair. 100/100 gives the pure Bühlmann ZHL-16C ceiling; values above 100 go beyond it, which is less conservative than the raw model. A low GF Low with a high GF High deepens the first stop while keeping the shallow stops short. Editable here or directly beside the altGF checkbox on the main screen.
+
+    NDL CALCULATION
+    Which gradient factor decides whether a direct, no-stop ascent to the surface is still allowed. GF High is the standard behaviour for ZHL16-C. GF Low is stricter and ends the no-decompression phase earlier.
+
+    CONDITIONS
+    Altitude of the dive site, 0 for sea level. Above sea level the air is thinner, so the same dive carries more decompression. Equilibrated means your tissues have off-gassed their excess nitrogen to match the thinner air; the U.S. Navy Diving Manual puts that at about twelve hours at altitude. If you drove up this morning you are still carrying your sea-level nitrogen and need considerably more decompression — at 3000 m that can double the obligation, so state it honestly. Hours at altitude covers the middle: the tissues wash out at their own rates, and the slow ones are still loaded well after the fast ones have finished. Note this is equilibration, not acclimatisation — adjusting to the lower oxygen takes far longer and is not modelled here at all.
+
+    Conservatism applies only to ZHL16-C with gradient factors switched off. It (0–50 %) preloads the tissue compartments with additional inert gas — nitrogen, and helium in proportion when the profile uses trimix — weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.
+
+    STOP DEPTHS
+    Stop distance is the interval between decompression stops — 3 m is the convention, some rebreather divers prefer 6 m. Last stop is the depth of the final stop; some prefer pulling the 10 ft / 3 m stop deeper. Both apply to every schedule, whichever model, gradient factors or deep stops are in use.
+
+    DEEP STOPS
+    Pyle deep stops insert short stops between the bottom and the first normal stop (mean-depth rule, re-run iteratively) to reduce microbubble formation and post-dive fatigue. Pyle stop time is the minutes spent at each generated stop (1–5). Not shown when gradient factors are enabled: GF Low takes over the deep-stop role.
+
+    AIR BREAKS
+    A break is planned when you are breathing oxygen at the last stop depth or shallower, or when CNS reaches the warning threshold on any rich mix. Break after is the oxygen time that earns a break, Break for is its length. The oxygen clock is cumulative: it runs across stop changes and excludes travel, so "Break after 30" means thirty minutes of oxygen wherever it was breathed.
+
+    Break gas is the mix you switch to. Left blank the planner takes the leanest mix you carry that is still breathable at that depth, which is what keeps a hypoxic back gas out of a 3 m break. No break is planned in the last few minutes before surfacing, and none is planned on closed circuit: there the answer is to lower the setpoint, and the plan says so.
+
+    Navy: the break is gas-exchange dead time. Inert tensions freeze and the stop simply grows by the break length. This is how the US Navy Air/O2 tables were generated and it is the only treatment published work validates.
+
+    Subsurface: the break is an ordinary gas segment, integrated on the break gas. The stop grows by whatever the model says. Physically truer, and validated by nobody.
+
+    CNS and OTU accrue on the break gas in both modes: dead time is about inert gas only.
+
+    TRAVEL GAS
+    With Travel gas checked, a descent on a hypoxic back gas starts on the leanest mix you carry that is breathable at the surface, and changes to the back gas at the first stop increment where the back gas is safe. It costs no decompression: it only moves the first few metres onto a stage. If no carried mix is breathable at the surface the plan says so and starts on the back gas anyway.
+
+    DESCENT AND ASCENT RATES
+    One range per line: depth1-depth2, rate, in your depth units. List descent ranges shallowest first and ascent ranges deepest first, and leave no gaps — a depth not covered by any range has no rate to travel at. The deepest ascent range must reach at least your deepest level, or the ascent from the bottom has no defined rate. Slow shallow ascent rates are credited to the decompression and can shorten stops or remove them entirely.
+
+    DECO SET POINT (CCR) AND SLIDE RATE
+    Setpoint changes by depth range during CCR deco, one per line, e.g. 80-30, 1.4 — a setpoint of 0 switches to open circuit for that range. Only active on closed circuit: the OC/CCR chip on a phone, the Open/Closed control elsewhere. Slide rate is the PO2 burned off per minute during a Scamahorn Slide: enter a bottom setpoint like 1.2-1.6 to ride the descent PO2 spike down to the setpoint for a deco advantage.
+
+    EXTENDED STOPS ON A DECO MIX SWITCH
+    Extra minutes held at the depth where the planner switches to a deco mix, on top of whatever the model requires. Common practice: settle on the new gas, confirm the analysis and the PO2, and let the switch do some work for you. The amount is chosen by the depth of the switch, in two bands. Switches shallower than 7 m / 23 ft are not extended — the final stop is already long. The extra time off-gasses you, so it does not simply add to the total: the stops above it usually shorten.
+
+    DECO GAS LIMITS
+    The planner auto-selects the deco gas with the highest PO2 that stays within Max PO2 and Max END. Set Max PO2 to 1.6 if you want 100% O2 at the 20 ft / 6 m stop; tune it down to lower CNS exposure at the cost of longer deco. At 1.55 oxygen is held to the 3 m stop instead, which lengthens the schedule and lowers the CNS total.
+
+    RMV VALUES
+    Respiratory Minute Volume for gas-consumption planning, in the RMV units above. Deco is usually lower than Bottom, since you are more at rest hanging on the line. If you don't know your RMV, measure it.
     """
 }
 
@@ -262,9 +363,12 @@ struct PlannerState: Codable {
     var decoSetpoints = "", slideRate = "0.1", maxPO2 = "1.6", maxEND = "40"
     var bottomRMV = "19", decoRMV = "14"
     var extStopShallow = 0, extStopDeep = 0
+    var airBreaksOn = false, airBreakMode = "navy"   // navy / subsurface
+    var breakAfter = "30", breakFor = "5", breakGas = ""
     var si48 = false, si24 = false, siActual = ""
     var decoGasesOn = true, decoGases = "50"
     var circuitClosed = false, plus3m = false, plus5min = false, useAltGF = false
+    var travelGas = false
     var levels: [DiveLevel] = []
 
     /// Residual inert gas carried between sessions.
@@ -323,7 +427,7 @@ final class PlannerModel: ObservableObject {
     @Published var rmvMetricOverride = false
     @Published var saltWater = true             // Water: Fresh / Salt
     @Published var o2Narcotic = false           // O2 Narcotic: No / Yes
-    @Published var model = "c"                  // "c" ZHL16-C, "vval" VVAL-18, "vpm" VPM-B
+    @Published var model = "c"                  // "c" ZHL16-C, "vval" VVAL-79, "vpm" VPM-B
     // VPM-B settings. Conservatism 0-4 scales both critical radii; 0 is
     // Baker's nominal VPM-B, which is what reproduces his published VPM.OUT.
     @Published var vpmConservatism = 0.0
@@ -342,6 +446,16 @@ final class PlannerModel: ObservableObject {
     @Published var hoursAtAltitude = "0"
     @Published var conservatism = 10.0          // 0-100 %
     @Published var deepStops = "p"              // n / p
+    /* Oxygen ("air") breaks. Off by default, as in Subsurface. When on, the
+     * mode decides what the break does to the decompression, not how long it
+     * is: Navy freezes inert gas exchange for the break (AB_DEAD, how the USN
+     * Air/O2 tables were built), Subsurface integrates it as an ordinary gas
+     * segment. CNS and OTU run on the break gas either way. */
+    @Published var airBreaksOn = false
+    @Published var airBreakMode = "navy"        // navy / subsurface
+    @Published var breakAfter = "30"            // minutes on the rich mix
+    @Published var breakFor = "5"               // minutes on the break gas
+    @Published var breakGas = ""                // blank = automatic
     @Published var pyleTime = 1                 // 1-5 min
     @Published var stopDistance = "3"
     @Published var lastStop = "3"
@@ -365,6 +479,9 @@ final class PlannerModel: ObservableObject {
     @Published var circuitClosed = false        // Open / Closed
     @Published var plus3m = false               // add 3 m / 10 ft to deepest level
     @Published var plus5min = false             // add 5 min to deepest level
+    /// Descend on the leanest carried mix breathable at the surface when the
+    /// back gas is hypoxic there, switching at the first safe stop increment.
+    @Published var travelGas = false
     @Published var useAltGF = false             // use Alternative GF pair
     // ---- Levels ----
     @Published var levels: [DiveLevel] = []
@@ -409,6 +526,8 @@ final class PlannerModel: ObservableObject {
         altitudeEquilibrated = s.altitudeEquilibrated
         hoursAtAltitude = s.hoursAtAltitude
         deepStops = s.deepStops; pyleTime = s.pyleTime
+        airBreaksOn = s.airBreaksOn; airBreakMode = s.airBreakMode
+        breakAfter = s.breakAfter; breakFor = s.breakFor; breakGas = s.breakGas
         stopDistance = s.stopDistance; lastStop = s.lastStop
         descentRates = s.descentRates; ascentRates = s.ascentRates
         decoSetpoints = s.decoSetpoints; slideRate = s.slideRate
@@ -419,6 +538,7 @@ final class PlannerModel: ObservableObject {
         decoGasesOn = s.decoGasesOn; decoGases = s.decoGases
         circuitClosed = s.circuitClosed
         plus3m = s.plus3m; plus5min = s.plus5min; useAltGF = s.useAltGF
+        travelGas = s.travelGas
         levels = s.levels
         baselineTissue = s.baselineTissue
         baselineDate = s.baselineDate
@@ -437,6 +557,8 @@ final class PlannerModel: ObservableObject {
         s.altitudeEquilibrated = altitudeEquilibrated
         s.hoursAtAltitude = hoursAtAltitude
         s.deepStops = deepStops; s.pyleTime = pyleTime
+        s.airBreaksOn = airBreaksOn; s.airBreakMode = airBreakMode
+        s.breakAfter = breakAfter; s.breakFor = breakFor; s.breakGas = breakGas
         s.stopDistance = stopDistance; s.lastStop = lastStop
         s.descentRates = descentRates; s.ascentRates = ascentRates
         s.decoSetpoints = decoSetpoints; s.slideRate = slideRate
@@ -447,6 +569,7 @@ final class PlannerModel: ObservableObject {
         s.decoGasesOn = decoGasesOn; s.decoGases = decoGases
         s.circuitClosed = circuitClosed
         s.plus3m = plus3m; s.plus5min = plus5min; s.useAltGF = useAltGF
+        s.travelGas = travelGas
         s.levels = levels
         s.baselineTissue = baselineTissue
         s.baselineDate = baselineDate
@@ -499,7 +622,7 @@ final class PlannerModel: ObservableObject {
         if rmvMetricOverride { p += "RmvMetric: \(rmvMetric ? "y" : "n")\n" }
         p += """
         SaltWater: \(saltWater ? "y" : "n")
-        Model: \(model == "vval" ? "vval18" : model == "vpm" ? "vpm" : "zhl16c")
+        Model: \(model == "vval" ? "vval79" : model == "vpm" ? "vpm" : "zhl16c")
         Altitude: \(altitude)
         AltitudeEquil: \(altitudeEquilibrated ? "y" : "n")
         HoursAtAltitude: \(hoursAtAltitude)
@@ -521,6 +644,11 @@ final class PlannerModel: ObservableObject {
         MaxEND: \(maxEND)
         ExtStopShallow: \(extStopShallow)
         ExtStopDeep: \(extStopDeep)
+        AirBreaks: \(airBreaksOn ? airBreakMode : "n")
+        O2Period: \(breakAfter)
+        AirBreakTime: \(breakFor)
+        BreakGas: \(breakGas)
+        TravelGas: \(travelGas ? "y" : "n")
         """
         if model == "vpm" {
             p += "\nVpmConservatism: \(Int(vpmConservatism))"
@@ -755,7 +883,7 @@ final class PlannerModel: ObservableObject {
 
         var modelText: String
         if model == "vval" {
-            modelText = "VVAL-18"
+            modelText = "VVAL-79"
         } else if model == "vpm" {
             modelText = "VPM-B +\(Int(vpmConservatism))"
         } else if gfOn {
@@ -775,8 +903,12 @@ final class PlannerModel: ObservableObject {
         if extStopShallow > 0 || extStopDeep > 0 {
             extras.append("ext stops \(extStopDeep)/\(extStopShallow) min")
         }
+        if airBreaksOn {
+            extras.append("air breaks \(airBreakMode == "navy" ? "Navy" : "Subsurface") \(breakAfter)/\(breakFor)")
+        }
         if plus3m { extras.append(depthsMetric ? "+3m" : "+10ft") }
         if plus5min { extras.append("+5min") }
+        if travelGas { extras.append("travel gas") }
         if repetitive { extras.append("SI \(surfaceInterval)") }
 
         return ([dive, modelText] + extras).joined(separator: " · ")
@@ -870,6 +1002,8 @@ public struct ZPlannerView: View {
     @State private var showConfig = false
     @State private var showLog = false
     @State private var showInfo = false
+    /// Driven by the Help menu on the Mac; never set anywhere else.
+    @ObservedObject private var help = HelpBus.shared
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -894,6 +1028,7 @@ public struct ZPlannerView: View {
         .sheet(isPresented: $showConfig) { ConfigSheet(m: m) }
         .sheet(isPresented: $showLog) { LogSheet(m: m) }
         .sheet(isPresented: $showInfo) { infoSheet }
+        .sheet(isPresented: $help.showManual) { manualSheet }
         // The autosave is debounced by a second, so flush on the way out in case
         // the app is closed immediately after the last edit.
         .onChange(of: scenePhase) { phase in
@@ -979,9 +1114,23 @@ public struct ZPlannerView: View {
                         .fontWeight(.semibold)
                         .fixedSize(horizontal: false, vertical: true)
                     Divider()
+                    // The manual is a menu item on the Mac, where anyone looks
+                    // for one first. Repeating it inside Info would put two
+                    // copies of the same text on one platform.
+                    #if os(macOS)
+                    Text("The manual, including an explanation of every Config "
+                       + "setting, is under Help \u{25B8} Lplanner Manual.")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    #else
                     Text(Manual.text)
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
+                    Divider()
+                    Text(ConfigGuide.text)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    #endif
                     Divider()
                     // macOS only, deliberately. An iOS build may not ask for or
                     // link to donations outside the App Store — App Review
@@ -1033,12 +1182,43 @@ public struct ZPlannerView: View {
     }
 
 
-    /// e.g. "1.1 (7) · engine 1.10.0" — what a tester should quote in a report.
+    /// The manual: how to drive the planner, then every Config setting. Opened
+    /// from Help on the Mac. Selectable, because people quote it in reports.
+    private var manualSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Lplanner Manual").font(.title3.bold())
+                Spacer()
+                Button("Done") { help.showManual = false }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.bottom, 14)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(Manual.text)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Divider()
+                    Text(ConfigGuide.text)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 420, maxWidth: 620, minHeight: 520)
+        .background(Color.planPaper)
+    }
+
+    /// e.g. "1.1 (7) · engine 1.10.0 · AI-assisted" — what a tester should quote in a report.
     private var buildStamp: String {
         let info = Bundle.main.infoDictionary
         let short = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "\(short) (\(build)) · engine \(ZPlan.version)"
+        return "\(short) (\(build)) · engine \(ZPlan.version) · AI-assisted"
     }
 
     @ViewBuilder private var shareButton: some View {
@@ -1135,6 +1315,8 @@ public struct ZPlannerView: View {
         HStack(spacing: 16) {
             check(m.depthsMetric ? "+3m" : "+10ft", isOn: $m.plus3m)
             check("+5min", isOn: $m.plus5min)
+            check("travel gas", isOn: $m.travelGas)
+            check("air breaks", isOn: $m.airBreaksOn)
             HStack(spacing: 4) {
                 check("altGF", isOn: $m.useAltGF)
                 // editable here as well as in Config — any values accepted
@@ -1251,8 +1433,7 @@ struct ConfigSheet: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    group("Units",
-                          help: "Depths sets the units for depth, altitude, stop distance, END, ascent and descent rates, and the dive levels themselves. Every value already entered is converted when you switch, and the plan is then computed in those units — a 10 ft stop grid is a grid of whole feet. RMVs sets the units for breathing-rate and gas-consumption figures; it follows Depths until you set it yourself, after which it stays where you put it.") {
+                    group("Units") {
                         // The conversion is deferred by one runloop turn on
                         // purpose. A Picker calls its binding's setter while
                         // SwiftUI is still evaluating this view, and these
@@ -1271,16 +1452,14 @@ struct ConfigSheet: View {
                                 off: "Cu.ft.", on: "Liters")
                         }
                     }
-                    group("Environment",
-                          help: "Fresh or salt water changes the depth-to-pressure conversion. O2 Narcotic controls whether oxygen counts as narcotic when calculating equivalent narcotic depths (ENDs).") {
+                    group("Environment") {
                         row("Water") { seg($m.saltWater, off: "Fresh", on: "Salt") }
                         row("O2 Narcotic") { seg($m.o2Narcotic, off: "No", on: "Yes") }
                     }
-                    group("Model",
-                          help: "ZHL16-C is the Buhlmann set used here. VVAL-18 is the U.S. Navy Thalmann EL-DCM (exponential uptake, linear elimination). VPM-B is the Yount/Hoffman varying permeability bubble model in Erik Baker's implementation — it limits the volume of gas released from bubble nuclei rather than the tension dissolved in tissue, which is why it puts the first stop much deeper, especially on helium mixes. Gradient factors and Conservatism apply to ZHL16-C only; VVAL-18 has neither, and VPM-B has its own conservatism ladder. With gradient factors enabled, Pyle deep stops are disabled — GF Low provides the deep-stop function — and Conservatism is ignored.") {
+                    group("Model") {
                         Picker("", selection: $m.model) {
                             Text("ZHL16-C").tag("c")
-                            Text("VVAL-18").tag("vval")
+                            Text("VVAL-79").tag("vval")
                             Text("VPM-B").tag("vpm")
                         }.pickerStyle(.segmented).labelsHidden()
                         if m.model == "c" {
@@ -1294,8 +1473,7 @@ struct ConfigSheet: View {
                         }
                     }
                     if m.model == "vpm" {
-                        group("VPM-B",
-                              help: "Conservatism 0–4 scales both critical radii: a larger nucleus is excited by a smaller gradient, so higher levels give more decompression. Level 0 is Baker's nominal VPM-B and is the setting that reproduces his published reference schedule. The critical radii are the parameter that actually differs between implementations — Baker ships 0.6 and 0.5 microns, Subsurface 0.55 and 0.45. Changing them takes you outside the validated envelope, so leave them alone unless you are deliberately comparing against another planner.") {
+                        group("VPM-B") {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Conservatism: +\(Int(m.vpmConservatism))   (0 = nominal VPM-B)")
                                 Slider(value: $m.vpmConservatism, in: 0...4, step: 1)
@@ -1309,15 +1487,13 @@ struct ConfigSheet: View {
                         }
                     }
                     if m.model == "c" {
-                        group("Alternative gradient factors",
-                              help: "A second GF pair, used instead of the main pair whenever altGF is checked on the main screen. Set these to whatever you like — any values are accepted, low and high independently, and they need not bracket the main pair. 100/100 gives the pure Buhlmann ZHL-16C ceiling; values above 100 go beyond it (less conservative than the raw model); a low GF Low with a high GF High deepens the first stop while keeping the shallow stops short. Editable here or directly beside the altGF checkbox on the main screen.") {
+                        group("Alternative gradient factors") {
                             HStack(spacing: 16) {
                                 row2("Alt GF Low", $m.altGfLow)
                                 row2("Alt GF High", $m.altGfHigh)
                             }
                         }
-                        group("NDL calculation",
-                              help: "Which gradient factor decides whether a direct, no-stop ascent to the surface is still allowed. GF High is the standard behaviour for ZHL16-C. GF Low is stricter and ends the no-decompression phase earlier.") {
+                        group("NDL calculation") {
                             Picker("Calculate NDL by", selection: $m.ndlLow) {
                                 Text("GF High (standard)").tag(false)
                                 Text("GF Low").tag(true)
@@ -1326,8 +1502,7 @@ struct ConfigSheet: View {
                             .opacity(gfOn ? 1 : 0.4)
                         }
                     }
-                    group("Conditions",
-                          help: "Altitude of the dive site, 0 for sea level. Above sea level the air is thinner, so the same dive carries more decompression. Equilibrated means your tissues have off-gassed their excess nitrogen to match the thinner air; the U.S. Navy Diving Manual puts that at about twelve hours at altitude. If you drove up this morning you are still carrying your sea-level nitrogen and need considerably more decompression — at 3000 m that can double the obligation, so state it honestly. Hours at altitude covers the middle: the tissues wash out at their own rates, and the slow ones are still loaded well after the fast ones have finished. Note this is equilibration, not acclimatisation — adjusting to the lower oxygen takes far longer and is not modelled here at all. Conservatism applies only to ZHL16-C with gradient factors switched off. It (0–50 %) preloads the tissue compartments with additional inert gas — nitrogen, and helium in proportion when the profile uses trimix — weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.") {
+                    group("Conditions") {
                         row2("Altitude (\(m.depthUnit))", $m.altitude)
                         // Only shown above sea level, where the two references
                         // differ. At 0 m equilibrated and just-arrived are the
@@ -1346,7 +1521,7 @@ struct ConfigSheet: View {
                             Text(m.model == "vpm"
                                    ? "Conservatism — VPM-B uses its own, above"
                                    : m.model == "vval"
-                                   ? "Conservatism — not used by VVAL-18"
+                                   ? "Conservatism — not used by VVAL-79"
                                    : gfOn
                                    ? "Conservatism — not used with gradient factors"
                                    : "Conservatism: \(Int(m.conservatism)) %  (0–50 maximum)")
@@ -1362,16 +1537,14 @@ struct ConfigSheet: View {
                     // were on — yet every schedule is built on this grid, GF or
                     // not, Pyle or not, and a diver who wants 6 m increments on
                     // a rebreather has nothing to do with deep stops.
-                    group("Stop depths",
-                          help: "Stop distance is the interval between decompression stops — 3 m is the convention, some rebreather divers prefer 6 m. Last stop is the depth of the final stop; some prefer pulling the 10 ft / 3 m stop deeper. Both apply to every schedule, whichever model, gradient factors or deep stops are in use.") {
+                    group("Stop depths") {
                         HStack(spacing: 16) {
                             row2("Stop distance (\(m.depthUnit))", $m.stopDistance)
                             row2("Last stop (\(m.depthUnit))", $m.lastStop)
                         }
                     }
                     if !(m.useGF && m.model == "c") {
-                        group("Deep stops",
-                              help: "Pyle deep stops insert short stops between the bottom and the first normal stop (mean-depth rule, re-run iteratively) to reduce microbubble formation and post-dive fatigue. Pyle stop time is the minutes spent at each generated stop (1–5). Not shown when gradient factors are enabled: GF Low takes over the deep-stop role.") {
+                        group("Deep stops") {
                             Picker("", selection: $m.deepStops) {
                                 Text("None").tag("n"); Text("Pyle").tag("p")
                             }.pickerStyle(.segmented).labelsHidden()
@@ -1382,23 +1555,33 @@ struct ConfigSheet: View {
                             }
                         }
                     }
-                    group("Descent — range, rate (\(m.depthUnit)/min)",
-                          help: "One range per line: depth1-depth2, rate, all in \(m.depthUnit). List shallowest range first, leave no gaps — a depth not covered by any range has no rate to travel at.") {
+                    group("Air breaks") {
+                        Toggle("Plan air breaks", isOn: $m.airBreaksOn)
+                        if m.airBreaksOn {
+                            Picker("", selection: $m.airBreakMode) {
+                                Text("Navy").tag("navy")
+                                Text("Subsurface").tag("subsurface")
+                            }.pickerStyle(.segmented).labelsHidden()
+                            HStack(spacing: 16) {
+                                row2("Break after (min)", $m.breakAfter)
+                                row2("Break for (min)", $m.breakFor)
+                            }
+                            row2("Break gas", $m.breakGas)
+                        }
+                    }
+                    group("Descent — range, rate (\(m.depthUnit)/min)") {
                         editor($m.descentRates, height: 52)
                     }
-                    group("Ascent — range, rate (\(m.depthUnit)/min, deepest first)",
-                          help: "One range per line, deepest range first, no gaps, all in \(m.depthUnit). The deepest range must reach at least your deepest level, or the ascent from the bottom has no defined rate. Slow shallow ascent rates are credited to the decompression and can shorten stops or remove them entirely.") {
+                    group("Ascent — range, rate (\(m.depthUnit)/min, deepest first)") {
                         editor($m.ascentRates, height: 76)
                     }
-                    group("Deco Set Point (CCR) / Slide rate",
-                          help: "Setpoint changes by depth range during CCR deco, one per line, e.g. 80-30, 1.4 — a setpoint of 0 switches to open circuit for that range. Only active on closed circuit — the OC/CCR chip on a phone, the Open/Closed control elsewhere (disabled for open-circuit dives). Slide rate is the PO2 burned off per minute during a Scamahorn Slide: enter a bottom setpoint like 1.2-1.6 to ride the descent PO2 spike down to the setpoint for a deco advantage.") {
+                    group("Deco Set Point (CCR) / Slide rate") {
                         editor($m.decoSetpoints, height: 52)
                             .disabled(!m.circuitClosed)
                             .opacity(m.circuitClosed ? 1 : 0.4)
                         row2("Slide rate (PO2/min)", $m.slideRate)
                     }
-                    group("Extended stops on a deco mix switch",
-                          help: "Extra minutes held at the depth where the planner switches to a deco mix, on top of whatever the model requires. Common practice: settle on the new gas, confirm the analysis and the PO2, and let the switch do some work for you. The amount is chosen by the depth of the switch, in two bands. Switches shallower than 7 m / 23 ft are not extended — the final stop is already long. The extra time off-gasses you, so it does not simply add to the total: the stops above it usually shorten.") {
+                    group("Extended stops on a deco mix switch") {
                         HStack(spacing: 16) {
                             Stepper(m.depthsMetric ? "30 m+ : \(m.extStopDeep) min"
                                                    : "100 ft+ : \(m.extStopDeep) min",
@@ -1412,15 +1595,13 @@ struct ConfigSheet: View {
                                 .frame(maxWidth: 260)
                         }
                     }
-                    group("Deco gas limits",
-                          help: "The planner auto-selects the deco gas with the highest PO2 that stays within Max PO2 and Max END. Set Max PO2 to 1.6 if you want 100% O2 at the 20 ft / 6 m stop; tune it down to lower CNS exposure at the cost of longer deco.") {
+                    group("Deco gas limits") {
                         HStack(spacing: 16) {
                             row2("Max PO2", $m.maxPO2)
                             row2("Max END (\(m.depthUnit))", $m.maxEND)
                         }
                     }
-                    group("RMV values",
-                          help: "Respiratory Minute Volume for gas-consumption planning, in the RMV units above. Deco is usually lower than Bottom, since you are more at rest hanging on the line. If you don't know your RMV, measure it.") {
+                    group("RMV values") {
                         HStack(spacing: 16) {
                             row2("Bottom (\(m.rmvUnit))", $m.bottomRMV)
                             row2("Deco (\(m.rmvUnit))", $m.decoRMV)
@@ -1441,15 +1622,15 @@ struct ConfigSheet: View {
     private var gfOn: Bool { (m.useGF || m.useAltGF) && m.model == "c" }
 
     // ---- layout helpers: fixed label widths so nothing truncates ----
-    private func group<C: View>(_ title: String, help: String,
+    /// Config is a plain list of controls. The explanation of every setting
+    /// lives in the manual instead - Help > Lplanner Manual on the Mac, the
+    /// Info button elsewhere - so the sheet stays short enough to find things
+    /// in and the text stays long enough to be worth reading.
+    private func group<C: View>(_ title: String,
                                 @ViewBuilder _ content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.headline)
             content()
-            Text(help)
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             Divider()
         }
     }
