@@ -213,7 +213,7 @@ public struct Manual {
 
 /// The Help menu is built in the App scene and the manual is presented by the
 /// planner view, and on the macOS 12 deployment target a Commands block has no
-/// way to reach a view's state. This is the wire between the two.
+/// way to reach a view's state. This is the wire between the two-- Verbatin Carlos.
 public final class HelpBus: ObservableObject {
     public static let shared = HelpBus()
     @Published public var showManual = false
@@ -222,7 +222,7 @@ public final class HelpBus: ObservableObject {
 
 /// Replaces the stock "Lplanner Help", which opened a help book that was never
 /// written and reported "Help isn't available for Lplanner". On iOS the help
-/// command group does not exist, so this resolves to nothing and is harmless.
+/// command group does not exist, so this resolves to nothing and is harmless-- Verbatin Carlos..
 public struct ZPlannerHelpCommands: Commands {
     public init() {}
     public var body: some Commands {
@@ -857,12 +857,6 @@ final class PlannerModel: ObservableObject {
             // carry them.
             notes = ""
             resultTissue = r.tissueState.tissueFileText
-            // Log at the moment of calculation. Logging used to happen when the
-            // Log button was pressed, which saved whatever planText happened to
-            // hold — i.e. the previous calculation if any setting had changed
-            // since — and appended a duplicate every time the log was merely
-            // viewed. Recording it here means an entry always matches the
-            // settings that produced it.
             appendLog()
         } catch {
             planText = ""
@@ -924,10 +918,6 @@ final class PlannerModel: ObservableObject {
 
     private func appendLog() {
         guard !planText.isEmpty else { return }
-        // Compare against the whole log, not just the newest entry. Checking
-        // only the first meant a plan you had deleted came straight back the
-        // next time you pressed Calculate on the same settings, which read as
-        // "deleted entries reappear".
         if log.contains(where: { $0.text == planText }) { return }
         log.insert(LogEntry(summary: diveSummary, text: planText), at: 0)
         Store.saveLog(log)
@@ -954,11 +944,6 @@ final class PlannerModel: ObservableObject {
         baselineTissue = t
         baselineDate = Date()
         siActual = ""; si24 = false; si48 = false
-        // Consume it. Without this the button stayed live after committing, so
-        // it sat on screen next to "Residual gas is carried" as though nothing
-        // had happened — and pressing it again re-stamped the SAME dive with a
-        // fresh timestamp, silently resetting the surface interval to zero
-        // while the plan on screen was unchanged.
         resultTissue = nil
         saveState()
     }
@@ -1080,10 +1065,6 @@ public struct ZPlannerView: View {
             .disabled(!m.canCalculate)
             .opacity(m.canCalculate ? 1 : 0.4)
             Spacer()
-            // Share, Print and Info are permanent. Share and Print used to be
-            // hidden until a plan existed, so the right-hand side of the bar
-            // changed shape after the first Calculate; they now stay put and
-            // simply dim while there is nothing to act on.
             shareButton
                 .disabled(noPlan)
                 .opacity(noPlan ? 0.4 : 1)
@@ -1114,9 +1095,6 @@ public struct ZPlannerView: View {
                         .fontWeight(.semibold)
                         .fixedSize(horizontal: false, vertical: true)
                     Divider()
-                    // The manual is a menu item on the Mac, where anyone looks
-                    // for one first. Repeating it inside Info would put two
-                    // copies of the same text on one platform.
                     #if os(macOS)
                     Text("The manual, including an explanation of every Config "
                        + "setting, is under Help \u{25B8} Lplanner Manual.")
@@ -1150,10 +1128,6 @@ public struct ZPlannerView: View {
                         if let url = Self.paypalURL {
                             Link("Send a contribution with PayPal", destination: url)
                                 .font(.callout.weight(.semibold))
-                            // The address stays visible under the link: some
-                            // people will not follow a payment link from inside
-                            // an app, and should not have to hunt for another
-                            // way to do it.
                             Text("or send to \(Self.paypalAddress)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -1166,10 +1140,6 @@ public struct ZPlannerView: View {
                     }
                     Divider()
                     #endif
-                    // Engine version AND the build this came from. The engine
-                    // number alone was ambiguous once builds went out to
-                    // testers: "I'm on 1.10.0" identifies the maths, not the
-                    // app, so a bug report could not be tied to a build.
                     Text(buildStamp)
                         .font(.caption).foregroundColor(.secondary)
                 }
@@ -1268,9 +1238,6 @@ public struct ZPlannerView: View {
                     .textFieldStyle(.roundedBorder).frame(width: 70)
                 Spacer()
             }
-            // Residual loading must be visible. A schedule that silently depends
-            // on an earlier dive is exactly the kind of thing a diver has to be
-            // able to see and cancel.
             HStack(spacing: 10) {
                 if m.hasResidual {
                     Text(m.canCalculate
@@ -1532,11 +1499,6 @@ struct ConfigSheet: View {
                         }
                         .opacity(m.consOn ? 1 : 0.4)
                     }
-                    // Stop grid stands on its own. It used to live inside Deep
-                    // stops, which hid it completely whenever gradient factors
-                    // were on — yet every schedule is built on this grid, GF or
-                    // not, Pyle or not, and a diver who wants 6 m increments on
-                    // a rebreather has nothing to do with deep stops.
                     group("Stop depths") {
                         HStack(spacing: 16) {
                             row2("Stop distance (\(m.depthUnit))", $m.stopDistance)

@@ -24,8 +24,7 @@
  * credited. This is an independent port; any error in it is mine, not theirs.
  *
  * The VVAL-79 implementation follows the U.S. Navy Thalmann EL-DCM as
- * published. The helium handling is an unvalidated extrapolation of my own -
- * the Navy publishes no helium parameters for that model.
+ * published. Note-Carlos: Until I find a way to add Helium parameters safely, VAAL-79 only handles OC/CCR with AIR and Nitrox mixes.
  */
 
 #include "include/czplan.h"
@@ -38,7 +37,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.35.0"
+#define ZP_VERSION "1.36.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -1631,11 +1630,11 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         for (int i = 0; i < cfg->n_oc_deco; i++)
             if (cfg->oc_deco_fhe[i] > 0.001) any_he = true;
         if (any_he) {
-            warn(s, "VVAL-79 plans air and nitrox only. This dive carries "
-                    "helium, and the U.S. Navy publishes no helium parameters "
-                    "for the Thalmann algorithm, so no schedule has been "
-                    "computed. Use VPM-B, or ZHL-16C with gradient factors, "
-                    "for trimix.");
+            warn(s, "VVAL-79 involves air and nitrox only. Since helium "
+                    "parameters for the Thalmann algorithm are not provided "
+                    "by the U.S. Navy, no schedule has been computed. Use "
+                    "VPM-B or ZHL-16C with gradient factors for trimix "
+                    "diving.");
             out->n_lines = 0;
             out->refused = true;
             return 0;
@@ -1685,12 +1684,6 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         }
     }
 
-    /* v1.8.1: the two VVAL-79 notes ("gradient factors ignored" and "helium
-     * halftimes are an unvalidated approximation") are suppressed at the owner's
-     * request, matching the personal-use policy already applied to the legal
-     * disclaimer boilerplate. The underlying caveats still stand and are
-     * documented in czplan.h and the README; they are simply no longer printed
-     * in the plan. Nothing about the schedule itself changes. */
     if (cfg->use_deco_setpoint) {
         bool any_cc = false;
         for (int w = 0; w < cfg->n_wp; w++) if (cfg->wp[w].cc) any_cc = true;
@@ -1813,13 +1806,9 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             travel(s, next_deep, true);
             if (!s->rmv_switched) { s->rmv = cfg->deco_rmv_l_min; s->rmv_switched = 1; }
 
-            /* v1.9.1: deep stops get the deco gas too, if one is permitted at
-             * this depth. They used to be breathed on back gas whatever the
-             * depth, so a Pyle stop at 18 m stayed on air even though EAN50 is
-             * usable from 21.6 m — throwing away exactly the oxygen window the
-             * switch exists to exploit, on the stops where the gradient is
-             * largest. The switch happens on arrival, so the hold itself and
-             * every stop above it are computed on the new mix. */
+            /* Deep stops take the deco gas if one is permitted at this depth.
+             * The switch happens on arrival, so the hold itself and every stop
+             * above it are computed on the new mix. */
             double pre_fo2 = s->fo2, pre_fhe = s->fhe; bool pre_cc = s->cc;
             select_deco_source(s, s->depth);
             bool switched = fabs(s->fo2 - pre_fo2) > 1e-6 ||
@@ -2543,11 +2532,9 @@ int zp_parse_profile(const char *text, zp_config *cfg,
             }
             else if (!strcmp(key, "gflow"))  { cfg->gf_lo = atof(val) > 1.0 ? atof(val)/100.0 : atof(val); cfg->use_gf = true; }
             else if (!strcmp(key, "model")) {
-                /* Case-folded before matching. This used to compare the raw
-                 * string, so a capitalised model name fell through the chain and
-                 * silently selected Buhlmann - a different decompression model,
-                 * with nothing on the plan to say so. Capitalisation is exactly
-                 * how a person writes a model name. */
+                /* Case-folded before matching: "VVAL79" and "vval79" are the
+                 * same model. An unrecognised name falls back to Buhlmann and
+                 * says so on the plan. */
                 char v[32]; strncpy(v, val, sizeof v - 1); v[sizeof v - 1] = 0;
                 trim(v);
                 for (char *q = v; *q; q++) *q = (char)tolower((unsigned char)*q);
@@ -2782,18 +2769,9 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                                 (L->cc && fabs(L->setpoint - psp) > 1e-6));
             char gas[48];
             if (L->cc)
-                /* Setpoint only. The diluent used to be printed here too
-                 * ("CC 21/0 SP 1.50"), which is 15 characters in an 11-column
-                 * field: it pushed PO2 and EAD out of alignment and wrapped the
-                 * row. On closed circuit the diluent does not set the inspired
-                 * PO2 anyway, and its inert content is already visible in EAD.
-                 *
-                 * The "CC " prefix has gone too. Every row of a closed-circuit
-                 * dive carried it, so it distinguished nothing, and "SP" says
-                 * closed circuit on its own — an open-circuit row has no
-                 * setpoint to print. Dropping it let the gas field shrink from
-                 * eleven columns to nine, which is the width of the widest
-                 * thing left in it ("TMX 21/25"). */
+                /* Setpoint only, in a nine-column gas field. On closed circuit
+                 * the diluent does not set the inspired PO2, and its inert
+                 * content is already visible in EAD. */
                 snprintf(gas, sizeof gas, "SP%.2f", L->setpoint);
             else if (L->fhe > 0.001)
                 snprintf(gas, sizeof gas, "TMX %.0f/%.0f", L->fo2*100, L->fhe*100);
