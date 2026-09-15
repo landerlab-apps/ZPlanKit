@@ -14,7 +14,7 @@
  * without formal mixed-gas decompression training.
  * =================================================================
  *
- * Copyright (C) 2026 Carlos Lander <scubalander@gmail.com>
+ * Copyright (C) 2026 Carlos Lander <carlos.lander@etik.com>
  *
  * This program is free software: you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
