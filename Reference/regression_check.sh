@@ -1,5 +1,5 @@
 #!/bin/sh
-# regression_check.sh - ZHL-16C and VVAL-18 must not move.
+# regression_check.sh - ZHL-16C and VVAL-79 must not move.
 #
 # Builds the engine twice, once from a git reference (default HEAD) and once
 # from the working tree, and diffs the schedules both models produce across a
@@ -57,7 +57,7 @@ status=0
 for m in 0 1; do
     case $m in
         0) name="ZHL-16C " ;;
-        1) name="VVAL-18 " ;;
+        1) name="VVAL-79 " ;;
     esac
     grep "^model=$m " "$TMP/base.txt" > "$TMP/b.$m"
     grep "^model=$m " "$TMP/work.txt" > "$TMP/w.$m"

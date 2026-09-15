@@ -43,8 +43,8 @@ ATTRIBUTION
 The decompression models implemented in Lplanner are the published work of
 others. Nothing in this notice claims any right in them:
 
-  ZHL-16B and ZHL-16C   A. A. Buhlmann, Decompression - Decompression Sickness
-  VVAL-18 / EL-DCM      E. D. Thalmann, U.S. Navy exponential-linear model
+  ZH-L16C               A. A. Buhlmann, Decompression - Decompression Sickness
+  VVAL-79 / EL-DCM      E. D. Thalmann, U.S. Navy exponential-linear model
   VPM / VPM-B           D. E. Yount and D. C. Hoffman, varying permeability
                         model; implementation by E. C. Baker, released to the
                         diving community to be distributed freely with credit

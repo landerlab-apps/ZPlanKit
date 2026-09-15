@@ -1,6 +1,6 @@
 /*
  * czplan.h — Portable reimplementation of the ZPlan v1.03 decompression engine
- *            (Bühlmann ZHL-16B/C, OC + CC, Pyle/WKPP-style deep stops,
+ *            (Bühlmann ZH-L16C, OC + CC, Pyle/WKPP-style deep stops,
  *             NOAA CNS / REPEX OTU tracking, gas consumption, time-to-fly)
  *
  * Clean-room reimplementation based on the ZPlan documentation (README,
@@ -61,17 +61,18 @@ typedef struct {
 typedef struct { double from_m, to_m, rate_m_min; } zp_rate_range;
 typedef struct { double from_m, to_m, setpoint;   } zp_setpoint_range;
 
+typedef enum { ZP_AB_OFF = 0, ZP_AB_NAVY, ZP_AB_SUBSURFACE } zp_airbreak_mode;
+
 typedef struct {
     /* general */
     bool   metric_output;      /* echo of UseMetric (affects report only) */
     bool   salt_water;
-    bool   use_b_values;       /* deprecated (v1.5): ZHL-16C is the only Buhlmann set */
     /* Baker gradient factors (optional). When use_gf is true, GF lo/hi
      * replace the ZPlan Conservatism mechanism entirely. Fractions 0-1. */
     bool   use_gf;
     double gf_lo, gf_hi;
-    /* Decompression model: 0 = Buhlmann ZHL-16 (b/c per use_b_values),
-     * 1 = U.S. Navy Thalmann EL-DCM, displayed as "VVAL-18".
+    /* Decompression model: 0 = Buhlmann ZH-L16C,
+     * 1 = U.S. Navy Thalmann EL-DCM with the VVal-79 air parameter set.
      * NOTE: the parameter set is VVAL-79 (NEDU TR 12-01) extended to twelve
      * compartments per the owner's parameters.py; the three fastest
      * compartments and the crossover pressures are WORKING values. */
@@ -120,6 +121,70 @@ typedef struct {
     double pyle_stop_min;
     double rmv_l_min;          /* bottom RMV, litres/min at 1 bar */
     double deco_rmv_l_min;
+    /* ---- oxygen ("air") breaks -------------------------------------
+     * Off by default. When on, the diver is taken off the oxygen-rich deco
+     * gas onto a leaner carried gas for air_break_min after every
+     * o2_period_min of oxygen breathing, to limit CNS oxygen toxicity.
+     *
+     * Two modes, because the two reference implementations disagree and
+     * neither is obviously right:
+     *
+     *   ZP_AB_NAVY       the break is gas-exchange dead time. Inert tensions
+     *                    are frozen for its duration and the stop simply grows
+     *                    by that much. This is how the US Navy Diving Manual
+     *                    Air/O2 tables were generated (NEDU TR 07-09 and the
+     *                    AB_DEAD parameter in TR 10-09), and it is the only
+     *                    treatment anything published validates.
+     *
+     *   ZP_AB_SUBSURFACE the break is an ordinary gas segment, integrated on
+     *                    the break gas like any other. The stop then grows by
+     *                    whatever the model says rather than by a fixed
+     *                    amount. This is what Subsurface does. It is
+     *                    physically truer and it is not validated by anyone.
+     *
+     * CNS and OTU accrue on the break gas in BOTH modes. "Dead time" in the
+     * Navy sense is about inert gas only; freezing the oxygen clock as well
+     * would defeat the entire purpose of the break. */
+    zp_airbreak_mode air_break_mode;
+    double o2_period_min;      /* oxygen breathing per cycle. Navy 30. */
+    double air_break_min;      /* break length. Navy 5. */
+    double o2_ceiling_m;       /* breaks only at or above this. Navy 30 fsw. */
+    double break_min_po2;      /* reject a break gas below this PO2 at depth */
+    double o2_trigger_fo2;     /* FO2 at or above which the O2 clock runs */
+
+    /* Second trigger condition, and the reason it is not a switch. Breaks are
+     * taken when the diver is on oxygen at or above o2_ceiling_m, OR when the
+     * accumulated CNS clock reaches cns_break_pct. 80 is reachable on open
+     * circuit where 100 is not: a 70 m trimix plan with a 55-minute bottom
+     * time runs to 94.8%, and closed circuit at setpoint 1.5 to 87.8%.
+     *
+     * The trigger does not disarm. CNS does not fall in the water - see the
+     * note on o2_rates - so once the clock is past the threshold it stays
+     * past it. That does not mean continuous breaks: the oxygen period still
+     * has to elapse between them, so the cadence is the same 30/5 either
+     * trigger fires it. */
+    double cns_break_pct;      /* CNS % that also calls for a break. 80. */
+
+    /* The diver's chosen break gas, 0 for automatic. When set and carried and
+     * breathable at the stop it wins; otherwise the automatic order applies:
+     * back gas first, then the leanest carried mix clearing break_min_po2.
+     * A chosen gas that cannot be used is reported, never silently replaced. */
+    double break_gas_fo2, break_gas_fhe;
+
+    /* Travel gas. A hypoxic back gas cannot be breathed on the surface: 10/50
+     * gives 0.101 bar there, and the plan has the diver on it from the first
+     * second of the descent. With this on, the descent starts on the leanest
+     * carried mix that IS breathable at the surface and switches to the back
+     * gas at the first stop increment where the back gas clears
+     * break_min_po2 - 9 m on a 10/50, where it reaches 0.192 bar.
+     *
+     * Engages only when the back gas is unsafe at the surface, so a normoxic
+     * plan is untouched. The gas is chosen automatically; there is no setting
+     * for it, because the rule (leanest mix breathable at the surface) is the
+     * one a diver would apply anyway. Off by default: turning it on changes
+     * the inert loading of the first minutes and the gas volumes, so existing
+     * plans stay as they are until the diver asks. */
+    bool   travel_gas;
     bool   use_oc_deco;
     double oc_deco_fo2[ZP_MAX_GASES];
     /* Helium fraction of each deco gas. Trimix and heliox deco mixes are a real
@@ -155,7 +220,9 @@ typedef struct {
 
 typedef enum {
     ZP_LINE_WAYPOINT, ZP_LINE_DEEPSTOP, ZP_LINE_NORMSTOP,
-    ZP_LINE_GASSWITCH   /* gas changed while ascending, no stop here */
+    ZP_LINE_GASSWITCH,  /* gas changed while ascending, no stop here */
+    ZP_LINE_AIRBREAK,   /* oxygen break: time on the leaner break gas */
+    ZP_LINE_TRAVELGAS   /* descent: switch off the travel gas onto back gas */
 } zp_line_kind;
 
 typedef struct {
@@ -173,6 +240,9 @@ typedef struct {
 typedef struct {
     zp_plan_line lines[ZP_MAX_PLAN_LINES];
     int    n_lines;
+    /* Set when the model declined to plan this dive at all (VVal-79 with
+     * helium). n_lines is 0 and the reason is in warnings. */
+    bool   refused;
     double total_deco_min;
     double runtime_min;
     double cns_pct;

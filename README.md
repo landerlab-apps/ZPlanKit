@@ -4,7 +4,7 @@
 >
 > This generated dive schedule could indirectly kill you and probably has bugs.
 > The author does not warrant that it accurately reflects A. A. Buhlmann's
-> algorithm or VVAL-18 algorithm. This dive schedule is experimental, and you
+> algorithm or VVAL-79 algorithm. This dive schedule is experimental, and you
 > use it at your own risk.
 
 
@@ -19,7 +19,7 @@ ZPlanKit/
 ├── Sources/
 │   ├── CZPlan/                    the engine: portable C99, zero dependencies
 │   │   ├── include/czplan.h       public C API
-│   │   └── czplan.c               ZHL-16 B/C model, planner, parser, report
+│   │   └── czplan.c               ZH-L16C, VVAL-79, VPM-B, planner, parser, report
 │   ├── ZPlanKit/ZPlanKit.swift    Swift API for macOS / iOS apps
 │   ├── ZPlannerUI/                SwiftUI front end (ZPlanner-style form)
 │   └── zplan-cli/main.c           command-line front end (like zplan.exe)
@@ -29,7 +29,7 @@ ZPlanKit/
 ---
 
 *Personal-use build: the legal disclaimer boilerplate, and as of v1.8.1 the
-VVAL-18 approximation notes, have been removed from program output at the
+VVAL-79 approximation notes, have been removed from program output at the
 owner's request. These were the only strings the engine wrote to the plan's
 `warnings` field, so that field is now always empty. The red warnings area in
 the apps remains in place and still displays profile-parse and planning errors.*
@@ -41,7 +41,7 @@ the apps remains in place and still displays profile-parse and planning errors.*
 This is not a port of decompiled code. The engine was written from:
 
 1. the **published Bühlmann ZHL-16 model** (17 compartments including 1b,
-   ZHL-16B and ZHL-16C a/b sets, partial-pressure weighted for He/N₂ mixes);
+   ZH-L16C a/b set, partial-pressure weighted for He/N₂ mixes);
 2. **differential testing against the original `Zplan.exe` binary**, run
    under Wine as a black-box oracle across dozens of profiles.
 
@@ -56,7 +56,7 @@ planner are good independent references.
 ### Validation results (this engine vs. original Zplan.exe v1.03)
 
 Reference dive — the bundled `Samples/profile.dat`
-(40 m / 20 min on air, fresh water, ZHL-16B, conservatism 20 %, Pyle stops 1:00):
+(40 m / 20 min on air, fresh water, ZH-L16C, conservatism 20 %, Pyle stops 1:00):
 
 | Quantity            | Original v1.03 | ZPlanKit v1.0.0 |
 |---------------------|---------------:|----------------:|
@@ -227,27 +227,84 @@ Repetitive dives: switch on "Use tissues from previous plan" — the tissue
 state of the last calculated plan is carried into the next one with the
 surface interval you enter.
 
-## VVAL-18 model (new in v1.2.0)
+## VVAL-79 model
 
-`Model: vval18` selects a U.S. Navy Thalmann Exponential-Linear model
+`Model: vval79` selects the U.S. Navy Thalmann Exponential-Linear model
 (EL-DCM): exponential gas uptake, linear elimination at rate k·P_cross for
 compartments supersaturated beyond their crossover, Workman-style
-MPTT(D) = MPTT₀ + D tolerance limits, 33 fsw/atm and 1.85 fsw alveolar
-water vapour per USN convention. Parameters follow the owner's
-`parameters.py`: the nine NEDU VVAL-79 compartments (NEDU TR 12-01,
-Table 3) extended with three fast compartments; displayed name "VVAL-18"
-per owner request. **Validated:** computed no-decompression limits match
-the published USN Rev. 7 air table at 60/80/130 fsw exactly (63/39/13 min)
-and 100 fsw within one minute (26 vs 25). **Caveats, from the parameter
-file itself:** the three fast-compartment MPTTs and all crossover
-pressures are [WORKING] values pending fitting against real dive logs, so
-deco-stop *lengths* (unlike NDLs) should not be expected to match Navy
-tables; helium half-times are an unvalidated √(28/4) scaling (a warning is
-emitted); gradient factors do not apply and are ignored with a note.
-Conservatism % applies normally. `RmvMetric: y/n` now sets RMV units
+MPTT(D) = MPTT₀ + D tolerance limits, and the USN 33 fsw/atm convention.
+Any spelling beginning `vval` is accepted, case-insensitively; an
+unrecognised model name falls back to Bühlmann and says so.
+
+**Air, nitrox and oxygen only.** The U.S. Navy publishes no helium
+parameters for this model, so rather than invent them the planner refuses a
+dive carrying helium and explains why. The earlier √(28/4) Graham's-law
+helium scaling was removed in v1.32.0: NEDU's own fitted helium data
+contradicts it.
+
+Parameters are the published nine-compartment VVAL-79 set (NEDU TR 12-01,
+Table 3; see also ADA561928): N₂ half-times 5, 10, 20, 40, 80, 120, 160,
+200 and 240 min, MPTT₀ 99.3, 87.7, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0 and
+43.5 fsw, slope 1.0 fsw/fsw, SDR 0.70, crossover overpressure 10 fsw.
+
+**Validated:** computed no-decompression limits reproduce *USN Diving
+Manual Rev. 7, Table 9-7* to within one minute at 15 of the 21 published
+depths, and within half a minute at 8, measured on the Navy bottom-time
+convention. Every deviation is permissive: the engine allows more bottom time
+than the manual at every depth, by 1.7 min at 100 fsw, 2.8 min at 45 fsw and
+19 min at 25 fsw, where the 240-minute compartment controls. The
+12-compartment set this replaced gave 21 min at 120 fsw where the manual says
+15.
+
+Gradient factors do not apply to this model and are ignored with a note;
+Conservatism % applies normally. `RmvMetric: y/n` sets RMV units
 independently of depth units.
 
 ## Version history
+* **v1.35.0** (2026-09-13) — **One oxygen clock for both air-break modes.**
+  Subsurface mode previously reset the clock at every stop, as Subsurface
+  itself does, so on a 70 m trimix dive the first break came after 49 minutes
+  of continuous oxygen. Both modes now carry the clock across stop changes and
+  exclude travel, per NEDU TR 07-09, so "break after 30" means thirty minutes
+  of cumulative oxygen wherever it was breathed. The modes still differ in how
+  the break is integrated: Navy freezes inert exchange for its length,
+  Subsurface runs it as an ordinary segment on the break gas. Regression over
+  62 stored configurations: two changed, both Subsurface mode, both only in
+  break position; totals unmoved.
+  Config in the apps no longer carries explanatory text. Every setting is
+  described in a single guide, reached from Help ▸ Lplanner Manual on macOS
+  and the Info button elsewhere; the macOS Help menu previously answered
+  "Help isn't available for Lplanner". The Info panel now labels the build
+  "AI-assisted" beside the version.
+* **v1.34.0** (2026-09-13) — **VVAL-18 becomes VVAL-79, air and nitrox only.**
+  The model now carries the published nine-compartment VVAL-79 parameter set
+  and reproduces USN Rev. 7 Table 9-7 within a minute at 15 of 21 depths,
+  always on the permissive side. A dive
+  carrying helium is refused rather than computed, with an explanation.
+  ZHL-16B removed entirely: the Bühlmann model is ZH-L16C only and the
+  `UseBValues` key is gone rather than merely ignored. Model names are parsed
+  case-insensitively — `Model: VVAL18` used to select Bühlmann silently — and
+  an unknown name now produces a notice instead of a silent substitution.
+  A stop that cleared in exactly zero time printed "-0 minutes".
+* **v1.33.0** (2026-09-13) — XVal-He-9 removed after evaluation. Implementing
+  it showed that no published source states how two inert gases share one
+  Thalmann compartment, and NEDU answered trimix empirically rather than
+  analytically (TR 15-04). The model lineup is settled at three: ZH-L16C with
+  gradient factors, VPM-B, and VVAL-79.
+* **v1.30.0–v1.32.0** (2026-09-13) — VVAL restored to the published
+  nine-compartment set; the fabricated helium MPTT table and per-gas slope,
+  which were copies of the nitrogen ones, removed with it.
+* **v1.26.0–v1.29.0** (2026-09-11) — **Air breaks and travel gas.** A break is
+  planned when oxygen is breathed at the last stop depth or shallower, or when
+  CNS reaches the warning threshold, in two modes (Navy dead time, Subsurface
+  modelled) with configurable period, length and break gas; the automatic
+  choice is the leanest carried mix still breathable at that depth, which keeps
+  a hypoxic back gas out of a 3 m break. No break is planned in the last few
+  minutes before surfacing, and none on closed circuit, where the plan advises
+  lowering the setpoint instead. Travel gas starts a descent on a hypoxic back
+  gas with the leanest carried mix breathable at the surface and changes over
+  at the first safe stop increment, at no cost in decompression. CNS advisory
+  warning at 80% on both circuits.
 * **v1.23.0** (2026-09-08) — **The experimental extra-slow ascent rule is
   removed**, along with its `ExtraSlow` toggle, the `extra_slow` config field
   and the engine branch. `ExtraSlow:` is still accepted in a `profile.dat` and
@@ -274,7 +331,7 @@ independently of depth units.
   was wrong — traced on a 120 m dive it held across the whole leg (36.0 m down
   to 33.2 m), a crawl, while the plan charged all of it to the stop line.
   **No schedule changes.** Every bundled sample — `profile.dat`,
-  `multideco_230ft.dat`, `trimix55.dat`, `vval18_100ft.dat` — is byte-identical
+  `multideco_230ft.dat`, `trimix55.dat`, `vval79_100ft.dat` — is byte-identical
   to v1.21.0 output, which is the point: with the recommended settings the rule
   had never altered a plan.
 * **v1.22.0** (2026-09-07) — Imperial units fixed across all three front ends

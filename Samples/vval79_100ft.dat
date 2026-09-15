@@ -1,7 +1,7 @@
 UseMetric: n
 RmvMetric: n
 SaltWater: y
-Model: vval18
+Model: vval79
 Altitude: 0
 Conservatism: 0
 StopDistance: 10
