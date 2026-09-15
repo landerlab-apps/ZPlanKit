@@ -248,9 +248,13 @@ Table 3; see also ADA561928): N₂ half-times 5, 10, 20, 40, 80, 120, 160,
 43.5 fsw, slope 1.0 fsw/fsw, SDR 0.70, crossover overpressure 10 fsw.
 
 **Validated:** computed no-decompression limits reproduce *USN Diving
-Manual Rev. 7, Table 9-7* within ±1 min at 16 of 17 depths, six of them
-exactly. The 12-compartment set this replaced gave 21 min at 120 fsw where
-the manual says 15.
+Manual Rev. 7, Table 9-7* to within one minute at 15 of the 21 published
+depths, and within half a minute at 8, measured on the Navy bottom-time
+convention. Every deviation is permissive: the engine allows more bottom time
+than the manual at every depth, by 1.7 min at 100 fsw, 2.8 min at 45 fsw and
+19 min at 25 fsw, where the 240-minute compartment controls. The
+12-compartment set this replaced gave 21 min at 120 fsw where the manual says
+15.
 
 Gradient factors do not apply to this model and are ignored with a note;
 Conservatism % applies normally. `RmvMetric: y/n` sets RMV units
@@ -274,7 +278,8 @@ independently of depth units.
   "AI-assisted" beside the version.
 * **v1.34.0** (2026-09-13) — **VVAL-18 becomes VVAL-79, air and nitrox only.**
   The model now carries the published nine-compartment VVAL-79 parameter set
-  and reproduces USN Rev. 7 Table 9-7 within ±1 min at 16 of 17 depths. A dive
+  and reproduces USN Rev. 7 Table 9-7 within a minute at 15 of 21 depths,
+  always on the permissive side. A dive
   carrying helium is refused rather than computed, with an explanation.
   ZHL-16B removed entirely: the Bühlmann model is ZH-L16C only and the
   `UseBValues` key is gone rather than merely ignored. Model names are parsed

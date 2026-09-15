@@ -130,82 +130,75 @@ public struct Disclaimer {
 public struct Manual {
     public static let text = """
     ENTERING A DIVE
-    Type Depth, Time and O2 % — plus He % for trimix — then press Add >>. \
-    Repeat for each level. Tap a level to edit it, use the arrows to reorder, \
-    × to remove. Click a level's box to leave it out without deleting it.
+    Type Depth, Time and O2 % — plus He % for trimix — then press Add >>. Repeat for each level. Tap a level to edit it, use the arrows to reorder, × to remove. Click a level's box to leave it out without deleting it.
 
     CLOSED CIRCUIT
-    Tap the OC chip so it reads CCR — on a tablet or Mac, switch Open to \
-    Closed. Set (setpoint) and Sld (Scamahorn slide) then appear beside the mix.
+    Tap the OC chip so it reads CCR — on a tablet, switch Open to Closed. Set (setpoint) and Sld (Scamahorn slide) then appear beside the mix.
 
     DECO GASES
-    Click Yes and list the mixes, e.g. 50, 100. The planner picks the richest \
-    one allowed by Max PO2 and Max END. The new mix appears in the gas column \
-    of the stop where you change on to it. If the switch depth is not a stop, \
-    a GasSw row marks it instead. Config can also hold you there for a few \
-    extra minutes — see Extended stops.
+    Click Yes and list the mixes, e.g. 50, 100. The planner picks the richest one allowed by Max PO2 and Max END. The new mix appears in the gas column of the stop where you change on to it. If the switch depth is not a stop, a GasSw row marks it instead. Config can also hold you there for a few extra minutes — see Extended stops.
 
     SETTINGS STRIP
-    On a phone the settings sit in one strip of chips above the tabs. It folds \
-    to a single summary line on the Plan tab so the schedule gets the full \
-    screen; the chevron opens or closes it by hand. altGF is a plain on/off \
-    there — its two numbers are set in Config.
+    On a phone the settings sit in one strip of chips above the tabs. It folds to a single summary line on the Plan tab so the schedule gets the full screen; the chevron opens or closes it by hand. altGF is a plain on/off here — its two numbers are set in Config.
 
     CONFIG
-    Units, water, altitude, model, gradient factors, deep stops, air breaks, \
-    ascent and descent rates, deco gas limits, RMVs. Config itself is a plain \
-    list of controls; every setting is explained under CONFIG SETTINGS below.
+    A plain list of controls. Every setting is explained under CONFIG SETTINGS below.
 
     SURFACE INTERVAL AND RESIDUAL GAS
-    When you surface, press "Next dive" to carry your inert gas loading \
-    forward into the dive you plan next. \
-    It is kept when the app is closed and ages with real time. While gas is \
-    carried you must state a surface interval — 48 hr, 24 hr or Actual — \
-    before Calculate will work.
+    When you surface, press "Next dive" to carry your inert gas loading forward into the dive you plan next. It is kept when the app is closed and ages with real time. While gas is carried you must state a surface interval — 48 hr, 24 hr or Actual — before Calculate will work.
 
-    Always use your exact surface interval time or a shorter duration if \
-    you're uncertain about how long to wait between dives.
+    Always use your exact surface interval time or a shorter duration if you're uncertain about how long to wait between dives.
 
     Press Clear to declare yourself clean again.
 
+    READING THE PLAN
+    Press "Full screen" above the schedule for the plan on its own. The type size is computed to fit the width exactly, so turning the phone sideways makes it bigger, not just wider. A− and A+ override it, Fit returns to the computed size, Sun goes to full brightness for reading in sunlight. The screen is held awake the whole time. Tap once to hide the controls; Back closes it.
+
     LOG
-    Every successful Calculate is recorded automatically, with the dive and \
-    settings that produced it. Swipe an entry to delete it, or press Clear.
+    Press Keep above the schedule to file a plan, stored with the dive and settings that produced it. Nothing is logged unless you ask. Keep is not "Next dive": it records a schedule, it does not load your tissues. Swipe an entry to delete it, or press Clear.
 
     SHARE AND PRINT
-    Both become available once a plan has been calculated.
+    Share, Print and Info sit at the right of the top bar. Share and Print dim while there is no plan to send.
+
+    Print opens the system print dialogue, from where the schedule can go to a printer or be saved as a PDF. It prints in the same monospace type you see on screen, because the columns only line up when every character is the same width.
+
+    WARNINGS
+    Advisories are not printed under the table, to keep the schedule readable on a phone. Read them here and apply them yourself. When the planner refuses to produce a schedule at all, the reason is printed in place of it.
+
+    GAS DENSITY
+    Above 5.2 g/L a bottom mix is denser than ideal; above 6.2 g/L it exceeds the limit given by Anthony & Mitchell, where work of breathing and CO2 retention rise steeply. CO2 retention is itself a risk factor for oxygen toxicity and narcosis. Add helium. For reference, 18/45 at 70 m is 6.4 g/L and 18/50 brings it to 5.9.
+
+    LAST STOP AT 6 M
+    A 6 m last stop works only on 100% oxygen, which delivers zero inspired inert gas at any depth. On air, 32%, 50% or anything else the inspired inert pressure must keep falling to drive off-gassing, so finish the stepped ascent — 4.5 m, 3 m — rather than hanging at 6 m. Check that Config, Last stop matches the gas you will actually be breathing there.
+
+    ASCENT RATE
+    Dive the rate you planned. A schedule computed at 10 m/min is wrong if you ascend at 5, which is what most technical divers actually do: either plan the slower rate or hold to the planned one.
+
+    The slow final ascent from the last stop is the exception. The planner ignores it, so taking it slowly is extra decompression rather than missing decompression.
+
+    ISOBARIC COUNTERDIFFUSION
+    Changing the inspired He:N2 ratio sharply off-gasses one inert gas while on-gassing the other. Switching from trimix to EAN50 raises inspired nitrogen to roughly what it was several stops deeper, halting nitrogen off-gassing while helium leaves quickly. That is the accepted trade rather than a fault, but do not compound it with a large nitrogen jump at depth. Note also that ICD names a process, not a single injury: the inner-ear form is a distinct problem with its own literature.
+
+    TRIMIX DECO GAS
+    A 50/50 or 50/25 deco mix removes more nitrogen earlier. It does not remove helium faster — breathing helium slows helium off-gassing, and you carry more of it to the switch onto oxygen. A longer schedule on a trimix deco gas is the model working, not a bug.
+
+    OXYGEN EXPOSURE
+    CNS % and OTUs are printed with every plan. Nothing enforces them — 100% CNS is a limit, not a target.
 
     DAN RECOMMENDATIONS
-    Divers Alert Network guidance, which sits outside any decompression \
-    model and is not enforced by this planner.
+    Divers Alert Network guidance, which sits outside any decompression model and is not enforced by this planner.
 
-    Flying after diving. The Time to Fly figure on the plan is the model's \
-    own arithmetic — the hours until your tissues tolerate a 10,000 ft \
-    cabin. It is not DAN's advice and is usually far shorter. DAN \
-    recommends a minimum 12-hour surface interval before flying after a \
-    single no-decompression dive, 18 hours after multiple dives or several \
-    days of diving, and considerably longer after any dive requiring \
-    decompression stops — commonly given as at least 24 hours. Take the \
-    longer figure.
+    Flying after diving. The Time to Fly figure on the plan is the model's own arithmetic — the hours until your tissues tolerate a 10,000 ft cabin. It is not DAN's advice and is usually far shorter. DAN recommends a minimum 12-hour surface interval before flying after a single no-decompression dive, 18 hours after multiple dives or several days of diving, and considerably longer after any dive requiring decompression stops — commonly given as at least 24 hours. Take the longer figure.
 
-    Altitude after diving. Driving over a mountain pass is the same problem \
-    as flying and is easier to overlook. Apply the same intervals.
+    Altitude after diving. Driving over a mountain pass is the same problem as flying and is easier to overlook. Apply the same intervals.
 
-    Diving at altitude. Arriving and diving the same day means your tissues \
-    still hold sea-level nitrogen, which is why Config asks whether you are \
-    equilibrated. DAN's guidance is to allow time at altitude before diving \
-    where you can.
+    Diving at altitude. Arriving and diving the same day means your tissues still hold sea-level nitrogen, which is why Config asks whether you are equilibrated. DAN's guidance is to allow time at altitude before diving where you can; the U.S. Navy puts equilibration at about twelve hours.
 
-    Hydration, exertion and thermal stress all affect decompression and \
-    none are modelled here. Cold on the deep portion followed by warm \
-    shallow stops is the worst combination for gas elimination.
+    Hydration, exertion and thermal stress all affect decompression and none are modelled here. Cold on the deep portion followed by warm shallow stops is the worst combination for gas elimination.
 
-    Ascent rate. Keep to the rate you planned. DAN and every training \
-    agency give 9–10 m/min as the maximum for the shallow portion.
+    Ascent rate. Keep to the rate you planned. DAN and every training agency give 9–10 m/min as the maximum for the shallow portion.
 
-    If you feel unwell after a dive, breathe oxygen and call the DAN \
-    emergency line for your region. Symptoms that appear hours later are \
-    still decompression illness.
+    If you feel unwell after a dive, breathe oxygen and call the DAN emergency line for your region. Symptoms that appear hours later are still decompression illness.
     """
 }
 
@@ -262,15 +255,15 @@ public struct ConfigGuide {
     Conservatism 0–4 scales both critical radii: a larger nucleus is excited by a smaller gradient, so higher levels give more decompression. Level 0 is Baker's nominal VPM-B and is the setting that reproduces his published reference schedule. The critical radii are the parameter that actually differs between implementations — Baker ships 0.6 and 0.5 microns, Subsurface 0.55 and 0.45. Changing them takes you outside the validated envelope, so leave them alone unless you are deliberately comparing against another planner.
 
     ALTERNATIVE GRADIENT FACTORS
-    A second GF pair, used instead of the main pair whenever altGF is checked on the main screen. Set these to whatever you like — any values are accepted, low and high independently, and they need not bracket the main pair. 100/100 gives the pure Bühlmann ZHL-16C ceiling; values above 100 go beyond it, which is less conservative than the raw model. A low GF Low with a high GF High deepens the first stop while keeping the shallow stops short. Editable here or directly beside the altGF checkbox on the main screen.
+    A second GF pair, used instead of the main pair whenever altGF is checked on the main screen. Any values are accepted, low and high independently, and they need not bracket the main pair. 100/100 gives the pure Buhlmann ZHL-16C ceiling and higher goes beyond it. A low GF Low with a high GF High deepens the first stop while keeping the shallow stops short.
 
     NDL CALCULATION
     Which gradient factor decides whether a direct, no-stop ascent to the surface is still allowed. GF High is the standard behaviour for ZHL16-C. GF Low is stricter and ends the no-decompression phase earlier.
 
     CONDITIONS
-    Altitude of the dive site, 0 for sea level. Above sea level the air is thinner, so the same dive carries more decompression. Equilibrated means your tissues have off-gassed their excess nitrogen to match the thinner air; the U.S. Navy Diving Manual puts that at about twelve hours at altitude. If you drove up this morning you are still carrying your sea-level nitrogen and need considerably more decompression — at 3000 m that can double the obligation, so state it honestly. Hours at altitude covers the middle: the tissues wash out at their own rates, and the slow ones are still loaded well after the fast ones have finished. Note this is equilibration, not acclimatisation — adjusting to the lower oxygen takes far longer and is not modelled here at all.
+    Altitude of the dive site, 0 for sea level. Thinner air means more decompression for the same dive. Equilibrated means your tissues have already off-gassed to match it; the U.S. Navy Diving Manual puts that at about twelve hours at altitude. If you drove up this morning you still carry your sea-level nitrogen and need considerably more decompression, which at 3000 m can double the obligation, so state it honestly. Hours at altitude covers the middle, since the slow compartments are still loaded well after the fast ones have finished. This is equilibration, not acclimatisation: adjusting to the lower oxygen takes far longer and is not modelled here.
 
-    Conservatism applies only to ZHL16-C with gradient factors switched off. It (0–50 %) preloads the tissue compartments with additional inert gas — nitrogen, and helium in proportion when the profile uses trimix — weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.
+    Conservatism applies only to ZHL16-C with gradient factors off. It (0-50 %) preloads the compartments with extra inert gas, weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.
 
     STOP DEPTHS
     Stop distance is the interval between decompression stops — 3 m is the convention, some rebreather divers prefer 6 m. Last stop is the depth of the final stop; some prefer pulling the 10 ft / 3 m stop deeper. Both apply to every schedule, whichever model, gradient factors or deep stops are in use.
@@ -281,13 +274,9 @@ public struct ConfigGuide {
     AIR BREAKS
     A break is planned when you are breathing oxygen at the last stop depth or shallower, or when CNS reaches the warning threshold on any rich mix. Break after is the oxygen time that earns a break, Break for is its length. The oxygen clock is cumulative: it runs across stop changes and excludes travel, so "Break after 30" means thirty minutes of oxygen wherever it was breathed.
 
-    Break gas is the mix you switch to. Left blank the planner takes the leanest mix you carry that is still breathable at that depth, which is what keeps a hypoxic back gas out of a 3 m break. No break is planned in the last few minutes before surfacing, and none is planned on closed circuit: there the answer is to lower the setpoint, and the plan says so.
+    Break gas is the mix you switch to. Left blank the planner takes the leanest mix you carry that is still breathable at that depth, which keeps a hypoxic back gas out of a 3 m break. No break is planned in the last few minutes before surfacing, and none on closed circuit, where the plan advises lowering the setpoint instead.
 
-    Navy: the break is gas-exchange dead time. Inert tensions freeze and the stop simply grows by the break length. This is how the US Navy Air/O2 tables were generated and it is the only treatment published work validates.
-
-    Subsurface: the break is an ordinary gas segment, integrated on the break gas. The stop grows by whatever the model says. Physically truer, and validated by nobody.
-
-    CNS and OTU accrue on the break gas in both modes: dead time is about inert gas only.
+    Navy: the break is gas-exchange dead time. Inert tensions freeze and the stop grows by the break length. This is how the US Navy Air/O2 tables were generated and the only treatment published work validates. Subsurface: the break is an ordinary gas segment integrated on the break gas, physically truer and validated by nobody. CNS and OTU accrue on the break gas in both modes.
 
     TRAVEL GAS
     With Travel gas checked, a descent on a hypoxic back gas starts on the leanest mix you carry that is breathable at the surface, and changes to the back gas at the first stop increment where the back gas is safe. It costs no decompression: it only moves the first few metres onto a stage. If no carried mix is breathable at the surface the plan says so and starts on the back gas anyway.

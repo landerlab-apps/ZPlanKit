@@ -37,7 +37,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.36.0"
+#define ZP_VERSION "1.37.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */
@@ -360,10 +360,49 @@ typedef struct {
 
 static void vpm_crush(const sim *s, double p_amb);
 
+/* The plan is a fixed-width document. The table is 55 columns and the readers
+ * do not soft-wrap it, because wrapping a column layout destroys it - so a
+ * warning, which is prose, has to arrive already broken into lines or it runs
+ * off the side of a phone. Wrapped here, once, rather than in three front
+ * ends: the report, the share text and the printout then all agree.
+ *
+ * Columns are counted in characters, not bytes, so a message carrying a
+ * multi-byte character still breaks in the right place. */
+#define WARN_COLS 55
+
 static void warn(sim *s, const char *msg) {
     size_t used = strlen(s->warn);
-    if (used + strlen(msg) + 2 < s->warnlen)
-        snprintf(s->warn + used, s->warnlen - used, "%s\n", msg);
+    if (used + 2 >= s->warnlen) return;
+    char  *out  = s->warn + used;
+    size_t room = s->warnlen - used;
+    size_t n = 0, col = 0;
+
+    for (const char *p = msg; *p; ) {
+        if (*p == '\n') {                 /* honour an explicit break */
+            if (n + 2 >= room) break;
+            out[n++] = '\n'; col = 0; p++;
+            continue;
+        }
+        while (*p == ' ') p++;
+        if (!*p) break;
+        const char *w = p;
+        size_t cols = 0;
+        while (*p && *p != ' ' && *p != '\n') {
+            if (((unsigned char)*p & 0xC0) != 0x80) cols++;   /* skip UTF-8 tails */
+            p++;
+        }
+        size_t bytes = (size_t)(p - w);
+        size_t need  = bytes + (col ? 1 : 0);
+        if (col && col + 1 + cols > WARN_COLS) { /* break before this word */
+            if (n + 1 >= room) break;
+            out[n++] = '\n'; col = 0; need = bytes;
+        }
+        if (n + need + 2 >= room) break;
+        if (col) { out[n++] = ' '; col++; }
+        memcpy(out + n, w, bytes); n += bytes; col += cols;
+    }
+    if (n + 2 <= room) { out[n++] = '\n'; out[n] = 0; }
+    else out[room - 1] = 0;
 }
 
 static double pamb(const sim *s, double depth_m) {
