@@ -37,7 +37,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.37.0"
+#define ZP_VERSION "1.38.0"
 const char *zp_version(void) { return ZP_VERSION; }
 
 /* ------------------------------------------------------------------ */

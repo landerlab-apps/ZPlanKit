@@ -261,6 +261,15 @@ Conservatism % applies normally. `RmvMetric: y/n` sets RMV units
 independently of depth units.
 
 ## Version history
+
+* **v1.38.0** (2026-09-21) — **Altitude after diving.** New `zp_altitude.c` /
+  `zp_altitude.h`: `zp_icm_after_dive` carries the Di Muro 2020 interconnected-model
+  state through a series, `zp_altitude` answers a car or airplane trip after the
+  dive (Method 1 Bühlmann GF needed against a DAN-anchored or dive GF-High limit;
+  Method 2 P(DCS) added by the trip), with surface oxygen. Flat request/answer
+  arrays so Swift and JNI share one entry point. Swift: `ZPlan.altitude`,
+  `ZPlan.interconnectedState`; ZPlannerUI: Altitude button, sheet, Config group.
+  Plan output unchanged.
 * **v1.35.0** (2026-09-13) — **One oxygen clock for both air-break modes.**
   Subsurface mode previously reset the clock at every stop, as Subsurface
   itself does, so on a 70 m trimix dive the first break came after 49 minutes

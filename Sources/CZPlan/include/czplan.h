@@ -289,4 +289,5 @@ const char *zp_version(void);
 #ifdef __cplusplus
 }
 #endif
+#include "zp_altitude.h"
 #endif /* CZPLAN_H */

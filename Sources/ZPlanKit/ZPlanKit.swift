@@ -4,8 +4,9 @@
 //
 //  ┌─────────────────────────────────────────────────────────────────┐
 //  │  WARNING: Decompression software can get you bent or killed.    │
-//  │  This engine is experimental. For trained mixed-gas             │
-//  │  decompression divers ONLY. Validate every schedule against     │
+//  │  This engine is experimental and for EDUCATIONAL purposes.      │
+//  │  For trained mixed-gas decompression divers ONLY.               │
+//  │  Validate every schedule against                                │
 //  │  independent tables/software before diving it.                  │
 //  └─────────────────────────────────────────────────────────────────┘
 //
@@ -118,7 +119,7 @@ public enum ZPlan {
 
     private static let atm = 1.01325
 
-    private static func load(tissueText: String, into cfg: inout zp_config) {
+    static func load(tissueText: String, into cfg: inout zp_config) {
         var n2: [Double] = [], he: [Double] = [], cns = 0.0
         for raw in tissueText.split(whereSeparator: \.isNewline) {
             let line = raw.trimmingCharacters(in: .whitespaces)
