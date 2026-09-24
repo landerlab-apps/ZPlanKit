@@ -262,6 +262,25 @@ independently of depth units.
 
 ## Version history
 
+* **v1.39.0** (2026-09-23) — **Gradient-factor ascent corrected.** The legacy
+  predictive ascent rule is gone with it: the `AscentCredit` config field, the
+  `ZP_ASCENT_CREDIT` environment override and the `ExtraSlow` key are removed,
+  so one ascent criterion remains. `NdlGF` now acts in that criterion. The ascent
+  criterion now uses the gradient factor of the depth being ascended to, as
+  Baker specifies, instead of the depth the diver is at. Leaving the last stop
+  is therefore judged at GF High; a single-stop schedule no longer runs the
+  whole ascent at GF Low. Every
+  ZH-L16C + GF schedule shortens: 31 min to 6 min at a 6 m last stop on
+  45 m / 20 min + 12 m / 20 min EAN50 at 45/85, 4 min off the 70 m trimix
+  reference, which now sits within a minute of MultiDeco. VVAL-79, VPM-B,
+  plain Buhlmann and GF 100/100 are unchanged. The stop grid is anchored on
+  the last stop, so a last stop off the stop-distance multiple (4.5 m with a
+  3 m grid) plans real stops instead of oscillating and reporting no
+  decompression. Stop depths print with a decimal where they need one. The
+  regression harness now covers gradient factors and last-stop depths, which
+  is why none of this was caught. Comments reduced to the equations,
+  parameter provenance and units.
+
 * **v1.38.0** (2026-09-21) — **Altitude after diving.** New `zp_altitude.c` /
   `zp_altitude.h`: `zp_icm_after_dive` carries the Di Muro 2020 interconnected-model
   state through a series, `zp_altitude` answers a car or airplane trip after the

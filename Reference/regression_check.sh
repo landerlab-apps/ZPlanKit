@@ -21,14 +21,16 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/base/include" "$TMP/work"
-git show "$REF:Sources/CZPlan/czplan.c"         > "$TMP/base/czplan.c"
-git show "$REF:Sources/CZPlan/include/czplan.h" > "$TMP/base/include/czplan.h"
+git show "$REF:Sources/CZPlan/czplan.c"             > "$TMP/base/czplan.c"
+git show "$REF:Sources/CZPlan/zp_altitude.c"        > "$TMP/base/zp_altitude.c"
+git show "$REF:Sources/CZPlan/include/czplan.h"     > "$TMP/base/include/czplan.h"
+git show "$REF:Sources/CZPlan/include/zp_altitude.h" > "$TMP/base/include/zp_altitude.h"
 
 CC=${CC:-cc}
 $CC -O2 -I"$TMP/base/include" -o "$TMP/base_h" \
-    Reference/regression_harness.c "$TMP/base/czplan.c" -lm
+    Reference/regression_harness.c "$TMP/base/czplan.c" "$TMP/base/zp_altitude.c" -lm
 $CC -O2 -ISources/CZPlan/include -o "$TMP/work_h" \
-    Reference/regression_harness.c Sources/CZPlan/czplan.c -lm
+    Reference/regression_harness.c Sources/CZPlan/czplan.c Sources/CZPlan/zp_altitude.c -lm
 
 # depth  time  fo2  fhe  salt
 PROFILES="
@@ -47,6 +49,14 @@ run() {                      # $1 = binary, $2 = output file
     echo "$PROFILES" | while read -r d t o h s; do
         [ -z "$d" ] && continue
         for m in 0 1 2; do "$1" "$m" "$d" "$t" "$o" "$h" "$s" >> "$2"; done
+        # Buhlmann with gradient factors: the ascent criterion, the stop grid
+        # and the last stop, none of which the plain-Buhlmann rows exercise.
+        for gf in "45 85" "30 85" "20 95"; do
+            for last in 3 6 4.5; do
+                # shellcheck disable=SC2086
+                "$1" 0 "$d" "$t" "$o" "$h" "$s" $gf "$last" >> "$2"
+            done
+        done
     done
 }
 

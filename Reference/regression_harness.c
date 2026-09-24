@@ -5,6 +5,7 @@
  * tree - and the two outputs diffed. See regression_check.sh.
  *
  * usage: harness <model 0|1|2> <depth m> <time min> <fo2> <fhe> <salt 0|1>
+ *                [gf low %] [gf high %] [last stop m]
  */
 
 #include <stdio.h>
@@ -21,7 +22,12 @@ int main(int argc, char **argv)
     c.metric_output  = true;
     c.salt_water     = atoi(argv[6]) != 0;
     c.stop_distance_m   = 3.0;
-    c.last_stop_depth_m = 3.0;
+    c.last_stop_depth_m = argc > 9 ? atof(argv[9]) : 3.0;
+    if (argc > 8 && atof(argv[7]) > 0) {
+        c.use_gf = true;
+        c.gf_lo  = atof(argv[7]) / 100.0;
+        c.gf_hi  = atof(argv[8]) / 100.0;
+    }
 
     c.n_wp = 1;
     c.wp[0].depth_m  = atof(argv[2]);
@@ -48,8 +54,10 @@ int main(int argc, char **argv)
     if (zp_plan(&c, &r)) { printf("PLAN FAILED\n"); return 1; }
 
     double total = 0.0;
-    printf("model=%s depth=%s time=%s mix=%s/%s salt=%s |",
-           argv[1], argv[2], argv[3], argv[4], argv[5], argv[6]);
+    printf("model=%s depth=%s time=%s mix=%s/%s salt=%s gf=%s/%s last=%s |",
+           argv[1], argv[2], argv[3], argv[4], argv[5], argv[6],
+           argc > 8 ? argv[7] : "-", argc > 8 ? argv[8] : "-",
+           argc > 9 ? argv[9] : "3");
     for (int i = 0; i < r.n_lines; i++)
         if (r.lines[i].kind == ZP_LINE_NORMSTOP ||
             r.lines[i].kind == ZP_LINE_DEEPSTOP) {

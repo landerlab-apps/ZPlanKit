@@ -257,7 +257,7 @@ public struct ConfigGuide {
     CONSERVATISM applies only to ZHL16-C with gradient factors off. It (0-50 %) preloads the compartments with extra inert gas, weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.
 
     STOP DEPTHS
-    Stop distance is the interval between decompression stops — 3 m is the convention; some rebreather divers prefer 6 m. Last stop is the depth of the final stop; some prefer pulling the 10 ft/3 m stop deeper. Both apply to every schedule, regardless of model, gradient factors, or deep stops.
+    Stop distance is the interval between decompression stops — 3 m is the convention; some rebreather divers prefer 6 m. Last stop is the depth of the final stop, chosen from 3, 4.5, 5, 6 or 9 m (10, 15, 20 or 30 ft); some prefer pulling the 3 m stop deeper. The grid is built upward from the last stop, so 4.5 m with 3 m stops gives 4.5, 7.5, 10.5 m. Both apply to every schedule, regardless of model, gradient factors, or deep stops.
 
     DEEP STOPS
     Pyle deep stops insert short stops between the bottom and the first normal stop (mean-depth rule, re-run iteratively) to reduce microbubble formation and post-dive fatigue. Pyle stop time is the minutes spent at each generated stop (1–5). Not shown when gradient factors are enabled: GF Low takes over the deep-stop role.
@@ -729,7 +729,7 @@ final class PlannerModel: ObservableObject {
         let f = metric ? 1.0 / Self.ftPerM : Self.ftPerM
         altitude      = scale(altitude, f)
         stopDistance  = scale(stopDistance, f)
-        lastStop      = scale(lastStop, f)
+        lastStop      = snapLastStop(scale(lastStop, f), metric: metric)
         maxEND        = scale(maxEND, f)
         descentRates  = scaleLines(descentRates, f, skip: [])
         ascentRates   = scaleLines(ascentRates, f, skip: [])
@@ -740,6 +740,16 @@ final class PlannerModel: ObservableObject {
         depthsMetric = metric
         // Gas units follow depth units unless the diver has said otherwise.
         if !rmvMetricOverride { applyRmvUnits(metric) }
+    }
+
+    var lastStopOptions: [String] {
+        depthsMetric ? ["3", "4.5", "5", "6", "9"] : ["10", "15", "20", "30"]
+    }
+
+    func snapLastStop(_ v: String, metric: Bool) -> String {
+        let opts = metric ? ["3", "4.5", "5", "6", "9"] : ["10", "15", "20", "30"]
+        guard let x = Double(v.replacingOccurrences(of: ",", with: ".")) else { return opts[0] }
+        return opts.min(by: { abs((Double($0) ?? 0) - x) < abs((Double($1) ?? 0) - x) }) ?? opts[0]
     }
 
     /// Switch the RMV / gas-volume unit system. Marks the choice as explicit,
@@ -1528,7 +1538,15 @@ struct ConfigSheet: View {
                     group("Stop depths") {
                         HStack(spacing: 16) {
                             row2("Stop distance (\(m.depthUnit))", $m.stopDistance)
-                            row2("Last stop (\(m.depthUnit))", $m.lastStop)
+                            Spacer(minLength: 0)
+                        }
+                        row("Last stop (\(m.depthUnit))") {
+                            Picker("", selection: Binding(
+                                get: { m.lastStopOptions.contains(m.lastStop)
+                                       ? m.lastStop : m.snapLastStop(m.lastStop, metric: m.depthsMetric) },
+                                set: { v in DispatchQueue.main.async { m.lastStop = v } })) {
+                                ForEach(m.lastStopOptions, id: \.self) { Text($0).tag($0) }
+                            }.pickerStyle(.segmented).labelsHidden()
                         }
                     }
                     if !(m.useGF && m.model == "c") {
@@ -1690,6 +1708,7 @@ struct PercentField: View {
     let value: Double
     let commit: (Double) -> Void
     @State private var text = ""
+    @State private var loaded = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1698,14 +1717,17 @@ struct PercentField: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 80)
                 .onChange(of: text) { t in
+                    guard loaded else { return }
                     let s = t.replacingOccurrences(of: ",", with: ".")
                              .replacingOccurrences(of: "%", with: "")
                              .trimmingCharacters(in: .whitespaces)
-                    if let v = Double(s), v > 0 { commit(v) }
+                    guard let v = Double(s), v > 0, abs(v - value) > 1e-9 else { return }
+                    DispatchQueue.main.async { commit(v) }
                 }
         }
         .onAppear {
             text = value == value.rounded() ? String(Int(value)) : String(format: "%g", value)
+            loaded = true
         }
     }
 }
