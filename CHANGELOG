@@ -1,0 +1,15 @@
+ZPlanKit changelog
+
+1.39.1 (2026-09-29)
+  Planner (czplan.c):
+  - During the ascent the gas and setpoint are now checked at every grid
+    depth, including depths where no stop is needed. The switch is made on
+    the fly at the switch depth, so the diver reaches the next stop already
+    on the new gas. Before, the check waited for a stop: 45 m / 20 min air
+    at GF 20/95 with EAN50 switched at 18 m instead of 21 m.
+    Stop lists unchanged over the regression set; CNS and OTU rise slightly
+    on 4 of 96 rows because the switch comes earlier.
+  The vendored engine copies in Lplanner-Android and Lplanner-FDroid are
+  not updated.
+  The dive computer engine (zp_rt) lives in its own repository,
+  DiveComputerEngine, next to this one.

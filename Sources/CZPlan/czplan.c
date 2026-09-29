@@ -37,7 +37,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.39.0"
+#define ZP_VERSION "1.39.1"
 const char *zp_version(void) { return ZP_VERSION; }
 
 #define P_SEALEVEL   1.01325      /* bar */
@@ -1533,6 +1533,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         (void)norm_idx;
         travel(s, gg, true);
         if (gg <= 1e-9) break;
+        do_gas_switch(s);
     }
 
     {
