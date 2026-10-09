@@ -37,7 +37,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.39.1"
+#define ZP_VERSION "1.39.3"
 const char *zp_version(void) { return ZP_VERSION; }
 
 #define P_SEALEVEL   1.01325      /* bar */
@@ -239,6 +239,9 @@ typedef struct {
     bool   cns_armed;
     bool   cc_cns_warned;
     bool   chosen_gas_warned;
+    bool   wp_check;
+    double wp_from, wp_to;
+    double wp_worst, wp_worst_from, wp_worst_to, wp_worst_at;
     char *warn; size_t warnlen;
 } sim;
 
@@ -352,6 +355,67 @@ static void inspired(const sim *s, double depth_m,
 }
 
 /* one integration step of dt minutes at given depth */
+static double ceiling_bar(const sim *s);
+
+/* Waypoint profiles are flown as given, so the ceiling is only checked.
+ * Buhlmann: fraction of the M-value gradient reached,
+ *     GF = (Pt - Pamb) / (M - Pamb),  M = Pamb / b + a.
+ * VVAL-79: metres by which the depth is above the ceiling. */
+static void wp_track(sim *s, double depth_m, double pa) {
+    double v = 0;
+    if (IS_VPM(s->cfg)) return;
+    if (IS_VVAL(s->cfg)) {
+        double over = ceiling_bar(s) - pa;
+        v = over > 0 ? over / s->bar_per_m : 0;
+    } else {
+        for (int i = 0; i < s->ncomp; i++) {
+            double pt = s->pn2[i] + s->phe[i];
+            if (pt <= pa) continue;
+            double a = (s->pn2[i] * s->n2a[i] + s->phe[i] * HE_A[i]) / pt;
+            double b = (s->pn2[i] * N2_B[i]  + s->phe[i] * HE_B[i])  / pt;
+            double gf = (pt - pa) / (pa / b + a - pa);
+            if (gf > v) v = gf;
+        }
+    }
+    if (v > s->wp_worst) {
+        s->wp_worst = v; s->wp_worst_at = depth_m;
+        s->wp_worst_from = s->wp_from; s->wp_worst_to = s->wp_to;
+    }
+}
+
+static void wp_report(sim *s) {
+    double lim = 0;
+    if (IS_VPM(s->cfg)) return;
+    if (!IS_VVAL(s->cfg)) {
+        lim = 1.0;
+        if (s->cfg->use_gf) lim = s->cfg->gf_hi > 0 ? s->cfg->gf_hi : 0.85;
+    }
+    if (s->wp_worst <= lim + 0.005) return;
+    bool met = s->cfg->metric_output;
+    double k = met ? 1.0 : FT_PER_M;
+    const char *u = met ? "m" : "ft";
+    char m[400];
+    if (IS_VVAL(s->cfg))
+        snprintf(m, sizeof m,
+            "Waypoints break the VVAL-79 ceiling: on the way from %.0f %s to "
+            "%.0f %s the diver is %.1f %s above it (at %.0f %s). Waypoints "
+            "are flown as entered and no stops are added between them. Add "
+            "the missing stops, or end the profile at the bottom and let the "
+            "planner compute the ascent.",
+            s->wp_worst_from * k, u, s->wp_worst_to * k, u,
+            s->wp_worst * k, u, s->wp_worst_at * k, u);
+    else
+        snprintf(m, sizeof m,
+            "Waypoints break the decompression ceiling: on the way from %.0f "
+            "%s to %.0f %s the tissues reach GF %.0f%% (at %.0f %s), above "
+            "the %.0f%% allowed. Waypoints are flown as entered and no stops "
+            "are added between them. Add the missing stops, or end the "
+            "profile at the bottom and let the planner compute the ascent.",
+            s->wp_worst_from * k, u, s->wp_worst_to * k, u,
+            s->wp_worst * 100.0, s->wp_worst_at * k, u, lim * 100.0);
+    warn(s, m);
+}
+
 static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
     double pin2, pihe, pio2;
     inspired(s, depth_m, &pin2, &pihe, &pio2);
@@ -408,6 +472,7 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
             s->phe[i] += (pihe - s->phe[i]) * (1.0 - exp(-M_LN2 * dth / HE_HT[i]));
         }
     }
+    if (s->wp_check) wp_track(s, depth_m, pa_now);
     if (s->in_ascent && s->out && s->out->decozone_start_m <= 0) {
         for (int i = 0; i < s->ncomp; i++)
             if (s->pn2[i] + s->phe[i] + VPM_OTHER_GASES >= pa_now) {
@@ -866,6 +931,10 @@ static double end_m(const sim *s, double depth_m) {
     return d > 0 ? d : 0;
 }
 
+static double narc_col(const zp_plan_line *L) {
+    return L->fhe > 0.001 ? L->end_m : L->ead_m;
+}
+
 static double display_ppo2(const sim *s, double depth_m) {
     double pa = pamb(s, depth_m) / P_SEALEVEL;   /* ATA, as the original */
     if (s->cc) return s->setpoint < pa ? s->setpoint : pa;
@@ -1242,9 +1311,12 @@ static int run_plan(const zp_config *cfg, zp_result *out,
 
     if (cfg->n_wp == 0) return -1;
 
+    s->wp_check = true;
     for (int w = 0; w < cfg->n_wp; w++) {
         const zp_waypoint *wp = &cfg->wp[w];
         bool going_deeper = wp->depth_m > s->depth;
+        s->wp_from = going_deeper ? wp->depth_m : s->depth;
+        s->wp_to = wp->depth_m;
         if (going_deeper) {
             double tfo2 = 0, tfhe = 0, swm = -1;
             double siv = cfg->stop_distance_m > 0 ? cfg->stop_distance_m : 3.0;
@@ -1306,6 +1378,8 @@ static int run_plan(const zp_config *cfg, zp_result *out,
                 L->ead_m = ead_m(s, s->depth);
         }
     }
+    s->wp_check = false;
+    wp_report(s);
     double max_depth = 0;
     for (int w = 0; w < cfg->n_wp; w++)
         if (cfg->wp[w].depth_m > max_depth) max_depth = cfg->wp[w].depth_m;
@@ -2109,7 +2183,7 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                 APP(" %s %s%-2s %3d:%02d %6.0f   %-9s %4.2f %4.0f%-2s\n",
                     "Break", dep_s(L->depth_m * dscale), du, bm, bs,
                     ceil(L->runtime_min - 1e-6), gas,
-                    L->ppo2, L->ead_m * dscale, du);
+                    L->ppo2, narc_col(L) * dscale, du);
                 prev_end = L->runtime_min; prev_depth = L->depth_m;
                 pfo2 = L->fo2; pfhe = L->fhe; pcc = (int)L->cc; psp = L->setpoint;
                 continue;
@@ -2120,13 +2194,20 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                 continue;
             }
             if (L->kind == ZP_LINE_GASSWITCH) {
+                const zp_plan_line *N = i + 1 < res->n_lines ? &res->lines[i + 1] : NULL;
+                if (L->stop_sec < 0.5 && N && N->stop_sec > 0.5 &&
+                    (N->kind == ZP_LINE_NORMSTOP || N->kind == ZP_LINE_DEEPSTOP) &&
+                    fabs(N->depth_m - L->depth_m) < 1e-6) {
+                    prev_end = L->runtime_min; prev_depth = L->depth_m;
+                    continue;
+                }
                 double hold = L->stop_sec / 60.0;
                 int gm = (int)hold, gs = (int)((hold - gm) * 60 + 0.5);
                 if (gs == 60) { gm++; gs = 0; }
                 APP(" %s %s%-2s %3d:%02d %6.0f   %-9s %4.2f %4.0f%-2s\n",
                     "GasSw", dep_s(L->depth_m * dscale), du, gm, gs,
                     ceil(L->runtime_min - 1e-6), gas,
-                    L->ppo2, L->ead_m * dscale, du);
+                    L->ppo2, narc_col(L) * dscale, du);
                 prev_end = L->runtime_min; prev_depth = L->depth_m;
                 pfo2 = L->fo2; pfhe = L->fhe; pcc = (int)L->cc; psp = L->setpoint;
                 continue;
@@ -2140,7 +2221,7 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                     dep_s(L->depth_m * dscale), du, mm, ss,
                     ceil(L->runtime_min - 1e-6),
                     (gas_changed && !(descending && travel > 0.02 && !fold)) ? gas : "",
-                    L->ppo2, L->ead_m * dscale, du);
+                    L->ppo2, narc_col(L) * dscale, du);
             prev_end = L->runtime_min; prev_depth = L->depth_m;
             pfo2 = L->fo2; pfhe = L->fhe; pcc = (int)L->cc; psp = L->setpoint;
         }

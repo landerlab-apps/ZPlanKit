@@ -1,5 +1,35 @@
 ZPlanKit changelog
 
+1.39.3 (2026-10-09)
+  Planner (czplan.c):
+  - The EAD column honours O2 narcotic. On a helium mix it prints the END
+    (oxygen counted when O2 narcotic is on); on a helium-free mix it stays
+    the nitrogen-only EAD, as MultiDeco does. Before, the column was always
+    nitrogen-only: 90 m on 11/57 with O2 narcotic on printed 30 m, not 33 m.
+  - A GasSw row is printed only when no stop follows at the switch depth.
+    When there is one, the stop row carries the new gas: 21 m EAN50 and
+    9 m EAN80 now print once instead of a 0:00 GasSw row plus the stop.
+    Stop list, run time, CNS, OTU and gas totals unchanged.
+  Regression set unchanged (ZHL-16C 80, VVAL-79 8, VPM-B).
+  Copied to Lplanner-FDroid/engine (was 1.39.0). Lplanner-Android compiles
+  this checkout directly. Both apps 1.9.2.
+
+1.39.2 (2026-10-08)
+  Planner (czplan.c):
+  - Waypoint profiles are now checked against the ceiling. Waypoints are
+    still flown exactly as entered and no stops are added between them,
+    but when an ascent between waypoints breaks the ceiling the report
+    warns, naming the leg and how far it went:
+      ZHL-16C: the highest GF reached, against GF high (100% without GF).
+      VVAL-79: metres above the ceiling.
+    VPM-B is not checked yet.
+    A tester entered 90 m / 20 min on 11/57 followed by stops at 36, 18, 9
+    and 6 m as waypoints. The plan came out with no warning, yet the leg
+    from 18 to 9 m reaches GF 250% against GF high 87%.
+    Regression set unchanged (ZHL-16C, VVAL-79 and VPM-B).
+  The vendored engine copies in Lplanner-Android and Lplanner-FDroid are
+  not updated.
+
 1.39.1 (2026-09-29)
   Planner (czplan.c):
   - During the ascent the gas and setpoint are now checked at every grid
