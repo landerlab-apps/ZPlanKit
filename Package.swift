@@ -15,7 +15,8 @@ let package = Package(
         .executable(name: "zplan", targets: ["zplan-cli"]),
     ],
     targets: [
-        // Portable C99 decompression engine (ZH-L16C, VVAL-79, VPM-B)
+        // Portable C99 decompression engine (ZH-L16C, VVAL-79, VPM-B, EMC-20H,
+        // XVal-He-4B, XVal-He-4, VVAL-18 air)
         .target(
             name: "CZPlan",
             path: "Sources/CZPlan"

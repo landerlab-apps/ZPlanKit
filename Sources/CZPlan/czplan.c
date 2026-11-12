@@ -23,8 +23,13 @@
  * community with the request that it be distributed freely and the authors
  * credited. This is an independent port; any error in it is mine, not theirs.
  *
+ * The EMC-20H implementation follows the Cochran Undersea Technology model
+ * as reconstructed from the Cochran Analyst 4 Pro planning engine.
+ *
  * The VVAL-79 implementation follows the U.S. Navy Thalmann EL-DCM as
- * published. Note-Carlos: Until I find a way to add Helium parameters safely, VAAL-79 only handles OC/CCR with AIR and Nitrox mixes.
+ * published. The XVal-He-4B, XVal-He-4 and VVAL-18 air implementations follow
+ * the same algorithm with the NEDU parameter sets, run as the NEDU table
+ * programs run them. Note-Carlos: Until I find a way to add Helium parameters safely, VAAL-79 only handles OC/CCR with AIR and Nitrox mixes.
  */
 
 #include "include/czplan.h"
@@ -37,7 +42,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#define ZP_VERSION "1.39.3"
+#define ZP_VERSION "1.41.2"
 const char *zp_version(void) { return ZP_VERSION; }
 
 #define P_SEALEVEL   1.01325      /* bar */
@@ -85,6 +90,12 @@ static const double HE_B[ZP_COMPARTMENTS] = {
 #define IS_VVAL(c) ((c)->use_vval == ZP_MODEL_VVAL79)
 #define IS_VPM(c)  ((c)->use_vval == ZP_MODEL_VPMB)
 #define IS_BUHL(c) ((c)->use_vval == ZP_MODEL_BUHLMANN)
+#define ZP_MODEL_EMC20H   3
+#define IS_EMC(c)  ((c)->use_vval == ZP_MODEL_EMC20H)
+#define ZP_MODEL_XVALHE4B 4
+#define ZP_MODEL_XVALHE4  5
+#define ZP_MODEL_VVAL18   6
+#define IS_NAVY(c) ((c)->use_vval >= ZP_MODEL_XVALHE4B && (c)->use_vval <= ZP_MODEL_VVAL18)
 
 #define VPM_NC          16
 #define VPM_GAMMA       0.0179      /* surface tension, N/m              */
@@ -135,6 +146,187 @@ static const double VVAL_MPTT0_FSW[VVAL_NC] = {
  * VVal-18M (scient-c_298 Table C.2). sPBOVP = 0.0 fsw at the surface. */
 #define VVAL_PBOVP      10.0
 #define VVAL_SPBOVP      0.0
+
+#define EMC_NC ZP_EMC_COMPARTMENTS
+#define EMC_PS 32.92236
+static const double EMC_HT[EMC_NC] = {
+    1.24, 1.76, 2.5, 3.55, 5.04, 7.15, 10.16, 14.42, 20.48, 29.07,
+    41.28, 58.6, 83.2, 118.13, 167.72, 238.12, 338.08, 480.0, 681.49, 967.57 };
+static const double EMC_E[EMC_NC] = {
+    172.8, 153.0, 136.0, 122.0, 109.0, 99.0, 86.0, 73.0, 63.0, 52.0,
+    43.0, 39.0, 35.0, 33.0, 32.5, 32.0, 31.5, 31.0, 30.75, 30.25 };
+static const double EMC_H[EMC_NC] = {
+    70.0, 56.47, 47.40, 41.33, 37.26, 34.54, 32.70, 31.48, 30.66, 30.12,
+    29.75, 29.50, 29.34, 29.22, 29.15, 29.10, 29.07, 29.05, 29.03, 29.02 };
+#define EMC_K_CREDIT 0.0175
+
+typedef struct {
+    double t[EMC_NC];
+    double m[EMC_NC];
+    double base, add, f;
+    int    mx;
+    double gfo2, gfhe;
+} emc_state;
+
+/* F = (1 + W + Tc)(1 - k min(n,30)) + C/200 + 26/512, n = max(index - 3, 0) */
+static double emc_factor(const emc_state *e, int idx) {
+    int n = idx - 3;
+    if (n < 0) n = 0;
+    if (n > 30) n = 30;
+    return e->base * (1.0 - EMC_K_CREDIT * n) + e->add;
+}
+
+/* Tc = ((75 - Tw) + 0.5)/1024 below 75 F, halved on low */
+static void emc_init(emc_state *e, const zp_config *c) {
+    double tc = 0.0;
+    if (c->emc_temp_comp > 0 && c->emc_water_temp_f < 75.0)
+        tc = ((75.0 - c->emc_water_temp_f) + 0.5) / 1024.0
+           * (c->emc_temp_comp == 1 ? 0.5 : 1.0);
+    e->base = 1.0 + c->emc_workload + tc;
+    e->add = c->conservatism_pct / 200.0 + 26.0 / 512.0;
+    e->mx = 0;
+    e->f = emc_factor(e, 0);
+    e->gfo2 = e->gfhe = -1.0;
+    for (int i = 0; i < EMC_NC; i++) {
+        e->t[i] = c->have_initial_emc ? c->init_emc[i] : 0.0;
+        e->m[i] = EMC_E[i];
+    }
+}
+
+/* M = (1 - r) E + r H, r = He / (He + N2) of the gas breathed */
+static void emc_gas(emc_state *e, double fo2, double fhe) {
+    if (fabs(fo2 - e->gfo2) < 1e-9 && fabs(fhe - e->gfhe) < 1e-9) return;
+    double fn2 = 1.0 - fo2 - fhe, r = (fhe + fn2) > 0 ? fhe / (fhe + fn2) : 0.0;
+    for (int i = 0; i < EMC_NC; i++) e->m[i] = (1.0 - r) * EMC_E[i] + r * EMC_H[i];
+    e->gfo2 = fo2; e->gfhe = fhe;
+}
+
+/* closed circuit: FO2 = min(SP Ps / (Ps + F D), 0.99) */
+static double emc_fo2(const emc_state *e, double fo2, bool cc, double sp_atm,
+                      double d_ft) {
+    if (!cc) return fo2;
+    double f = sp_atm * EMC_PS / (EMC_PS + e->f * d_ft);
+    return f > 0.99 ? 0.99 : f;
+}
+
+/* P_I = (1 - FO2)(F D + Ps)/0.79 - Ps */
+static double emc_pi(double fo2, double f, double d_ft) {
+    return (1.0 - fo2) * (f * d_ft + EMC_PS) / 0.79 - EMC_PS;
+}
+
+/* uptake 1 - e^(-dt/tau), washout dt/tau, tau = half-time / ln 2 */
+static void emc_kinetic(double *t, double p, double dt_min) {
+    for (int i = 0; i < EMC_NC; i++) {
+        double tau = EMC_HT[i] / M_LN2;
+        double k = t[i] < p ? 1.0 - exp(-dt_min / tau) : dt_min / tau;
+        t[i] += (p - t[i]) * k;
+        if (t[i] < 0.0) t[i] = 0.0;
+    }
+}
+
+/* first stop: from 10 floor(D/10) toward the surface, stop at L when
+ * T > M + (1 - FO2) F (L - 10)/0.79, else one 1 s step at L */
+static int emc_first_stop(const emc_state *e, double fo2, bool cc, double sp_atm,
+                          double d_ft) {
+    double t[EMC_NC];
+    memcpy(t, e->t, sizeof t);
+    for (int idx = (int)floor(d_ft / 10.0); idx >= 1; idx--) {
+        double L = idx * 10.0, fo = emc_fo2(e, fo2, cc, sp_atm, L);
+        double g = (1.0 - fo) * e->f * (L - 10.0) / 0.79;
+        for (int i = 0; i < EMC_NC; i++)
+            if (t[i] > e->m[i] + g) return idx;
+        emc_kinetic(t, emc_pi(fo, e->f, L), 1.0 / 60.0);
+    }
+    return 0;
+}
+
+static void emc_tick(emc_state *e, double fo2, double fhe, bool cc, double sp_atm,
+                     double d_ft, double dt_min) {
+    emc_gas(e, fo2, fhe);
+    double fo = emc_fo2(e, fo2, cc, sp_atm, d_ft);
+    emc_kinetic(e->t, emc_pi(fo, e->f, d_ft), dt_min);
+    int fs = emc_first_stop(e, fo2, cc, sp_atm, d_ft);
+    if (fs > e->mx) { e->mx = fs; e->f = emc_factor(e, fs); }
+}
+
+/* T <= M + (1 - FO2) F X / 0.79  =>  ceiling X = 0.79 (T - M) / ((1 - FO2) F) */
+static double emc_ceiling_ft(const emc_state *e, double fo2, bool cc, double sp_atm,
+                             double d_ft) {
+    double fo = emc_fo2(e, fo2, cc, sp_atm, d_ft), worst = 0.0;
+    double slope = (1.0 - fo) * e->f / 0.79;
+    for (int i = 0; i < EMC_NC; i++) {
+        double x = (e->t[i] - e->m[i]) / slope;
+        if (x > worst) worst = x;
+    }
+    return worst;
+}
+
+/* surface, once per minute: T <- T (1 - 1 / half-time) */
+static void emc_surface(emc_state *e, double minutes) {
+    for (int k = 0; k < (int)floor(minutes + 1e-9); k++)
+        for (int i = 0; i < EMC_NC; i++) e->t[i] *= 1.0 - 1.0 / EMC_HT[i];
+}
+
+#define NAVY_NC ZP_NAVY_COMPARTMENTS
+#define NAVY_PS     33.0
+#define NAVY_PACO2   1.5
+#define NAVY_PV      4.3
+#define NAVY_MAX_STOP_MIN 600.0
+static const double NAVY_HT[NAVY_NC] = {
+    5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 160.0, 200.0, 240.0 };
+static const double NAVY_HE_B[NAVY_NC] = {
+    131.892, 115.6081678, 64.87918986, 81.86306193, 75.18791046,
+    41.73111261, 35.1213553, 44.11379518, 34.59020035 };
+static const double NAVY_HE_S[NAVY_NC] = {
+    0.33419042769, 0.800407182, 1.024465037, 1.050153122, 1.087501551,
+    1.247708295, 1.132558137, 0.898801965, 0.900323709 };
+static const double NAVY_AIR_B[NAVY_NC] = {
+    120.0, 98.0, 78.0, 56.0, 48.5, 45.5, 44.5, 44.0, 43.5 };
+
+static const char *navy_name(int model) {
+    return model == ZP_MODEL_XVALHE4B ? "XVal-He-4B (NEDU TR 10-04)"
+         : model == ZP_MODEL_XVALHE4  ? "XVal-He-4 (NEDU TR 02-10)"
+         :                              "VVAL-18 air (NEDU TR 07-09)";
+}
+
+static void navy_init(double *t, const zp_config *c) {
+    for (int i = 0; i < NAVY_NC; i++)
+        t[i] = c->have_initial_navy ? c->init_navy[i] : 0.79 * NAVY_PS - NAVY_PACO2;
+}
+
+/* P_I = (1 - FO2) P - PACO2,  X = P - (PVO2 + PVCO2),  CCR: FO2 = min(SP Ps / P, 1)
+ * T >= X: T -= (X - P_I) dt/tau     T < X: T += (P_I - T)(1 - e^(-dt/tau)) */
+static void navy_tick(double *t, double fo2, bool cc, double sp_atm, double d_fsw,
+                      double dt_min) {
+    double p = NAVY_PS + d_fsw;
+    if (cc) { fo2 = sp_atm * NAVY_PS / p; if (fo2 > 1.0) fo2 = 1.0; }
+    double pi = (1.0 - fo2) * p - NAVY_PACO2, x = p - NAVY_PV;
+    bool one_s = fabs(dt_min - DT) < 1e-12;
+    for (int i = 0; i < NAVY_NC; i++) {
+        double tau = NAVY_HT[i] / M_LN2;
+        if (t[i] >= x)
+            t[i] -= one_s ? (x - pi) / (60.0 * tau) : (x - pi) * dt_min / tau;
+        else
+            t[i] += (pi - t[i]) * (1.0 - exp(one_s ? -1.0 / (60.0 * tau) : -dt_min / tau));
+    }
+}
+
+/* smallest x (fsw) with T_i <= b_i + s_i x */
+static double navy_ceiling_fsw(const double *t, int model) {
+    double worst = -1e9;
+    for (int i = model == ZP_MODEL_XVALHE4B ? 1 : 0; i < NAVY_NC; i++) {
+        double b = model == ZP_MODEL_VVAL18 ? NAVY_AIR_B[i] : NAVY_HE_B[i];
+        double s = model == ZP_MODEL_VVAL18 ? 1.0 : NAVY_HE_S[i];
+        double x = (t[i] - b) / s;
+        if (x > worst) worst = x;
+    }
+    return worst;
+}
+
+static void navy_surface(double *t, double minutes) {
+    long n = lround(minutes * 60.0);
+    for (long k = 0; k < n; k++) navy_tick(t, 0.21, false, 0.0, 0.0, DT);
+}
 
 typedef struct { double po2, cns, otu; } o2row;
 static const o2row O2TAB[] = {
@@ -242,6 +434,10 @@ typedef struct {
     bool   wp_check;
     double wp_from, wp_to;
     double wp_worst, wp_worst_from, wp_worst_to, wp_worst_at;
+    emc_state emc;
+    double navy[NAVY_NC];
+    double vk;
+    bool   buhl_ceiling;
     char *warn; size_t warnlen;
 } sim;
 
@@ -306,7 +502,8 @@ static void inspired(const sim *s, double depth_m,
          *
          * The inert tension is split between N2 and He in the ratio the
          * breathing source supplies them. */
-        double amb = pamb(s, depth_m);
+        /* Cross correction: the model runs on P k, k = P_sea / P_site */
+        double amb = pamb(s, depth_m) * s->vk;
         double pao2;
         if (s->cc) {
             double sp = s->setpoint;
@@ -315,7 +512,7 @@ static void inspired(const sim *s, double depth_m,
                 double e = s->slide_peak - rate * (s->runtime - s->slide_t0);
                 if (e > sp) sp = e;
             }
-            pao2 = sp * P_SEALEVEL * (1.0 - VVAL_PH2O_BAR / amb) - VVAL_AMBAO2_BAR;
+            pao2 = sp * s->vk * (1.0 - VVAL_PH2O_BAR / amb) - VVAL_AMBAO2_BAR;
             if (pao2 > amb) pao2 = amb;
         } else {
             pao2 = (amb - VVAL_PH2O_BAR) * s->fo2 - VVAL_AMBAO2_BAR;
@@ -328,7 +525,7 @@ static void inspired(const sim *s, double depth_m,
         if (fhe_share > 1.0) fhe_share = 1.0;
         *pihe = pinert * fhe_share;
         *pin2 = pinert * (1.0 - fhe_share);
-        *pio2 = pao2;
+        *pio2 = pao2 / s->vk;
         return;
     }
     if (s->cc) {
@@ -364,7 +561,7 @@ static double ceiling_bar(const sim *s);
 static void wp_track(sim *s, double depth_m, double pa) {
     double v = 0;
     if (IS_VPM(s->cfg)) return;
-    if (IS_VVAL(s->cfg)) {
+    if (IS_VVAL(s->cfg) || IS_EMC(s->cfg) || IS_NAVY(s->cfg)) {
         double over = ceiling_bar(s) - pa;
         v = over > 0 ? over / s->bar_per_m : 0;
     } else {
@@ -386,7 +583,7 @@ static void wp_track(sim *s, double depth_m, double pa) {
 static void wp_report(sim *s) {
     double lim = 0;
     if (IS_VPM(s->cfg)) return;
-    if (!IS_VVAL(s->cfg)) {
+    if (!IS_VVAL(s->cfg) && !IS_EMC(s->cfg) && !IS_NAVY(s->cfg)) {
         lim = 1.0;
         if (s->cfg->use_gf) lim = s->cfg->gf_hi > 0 ? s->cfg->gf_hi : 0.85;
     }
@@ -395,13 +592,15 @@ static void wp_report(sim *s) {
     double k = met ? 1.0 : FT_PER_M;
     const char *u = met ? "m" : "ft";
     char m[400];
-    if (IS_VVAL(s->cfg))
+    if (IS_VVAL(s->cfg) || IS_EMC(s->cfg) || IS_NAVY(s->cfg))
         snprintf(m, sizeof m,
-            "Waypoints break the VVAL-79 ceiling: on the way from %.0f %s to "
+            "Waypoints break the %s ceiling: on the way from %.0f %s to "
             "%.0f %s the diver is %.1f %s above it (at %.0f %s). Waypoints "
             "are flown as entered and no stops are added between them. Add "
             "the missing stops, or end the profile at the bottom and let the "
             "planner compute the ascent.",
+            IS_EMC(s->cfg) ? "EMC-20H"
+                : IS_NAVY(s->cfg) ? navy_name(s->cfg->use_vval) : "VVAL-79",
             s->wp_worst_from * k, u, s->wp_worst_to * k, u,
             s->wp_worst * k, u, s->wp_worst_at * k, u);
     else
@@ -437,9 +636,9 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
              *     boundary tension PVN2 = PVSAT + PBOVP
              * and the linear rate is the exponential slope there,
              *     dP/dt = KDsat * (PA_inert - PVN2). */
-            double pvo2 = pio2 - VVAL_O2_METABOLIC_BAR;
+            double pvo2 = pio2 * s->vk - VVAL_O2_METABOLIC_BAR;
             if (pvo2 < VVAL_PVO2_BAR) pvo2 = VVAL_PVO2_BAR;
-            double pvsat = pa_now - (pvo2 + VVAL_PVCO2_BAR + VVAL_PH2O_BAR);
+            double pvsat = pa_now * s->vk - (pvo2 + VVAL_PVCO2_BAR + VVAL_PH2O_BAR);
             double pbovp = depth_m <= 1e-9 ? VVAL_SPBOVP : VVAL_PBOVP;
             double pcross = pbovp * FSW2BAR;
             double pvn2 = pvsat + pcross;
@@ -472,10 +671,22 @@ static void tick(sim *s, double depth_m, double dt, bool is_bottom) {
             s->phe[i] += (pihe - s->phe[i]) * (1.0 - exp(-M_LN2 * dth / HE_HT[i]));
         }
     }
+    if (IS_EMC(s->cfg) && !s->freeze_inert)
+        emc_tick(&s->emc, s->fo2, s->fhe, s->cc, s->setpoint / P_SEALEVEL,
+                 depth_m * FT_PER_M, dt);
+    if (IS_NAVY(s->cfg) && !s->freeze_inert) {
+        double sp = s->setpoint;
+        if (s->cc && s->slide_peak > 0) {
+            double rate = s->cfg->slide_rate > 0 ? s->cfg->slide_rate : 0.1;
+            double e = s->slide_peak - rate * (s->runtime - s->slide_t0);
+            if (e > sp) sp = e;
+        }
+        navy_tick(s->navy, s->fo2, s->cc, sp / P_SEALEVEL, depth_m * FT_PER_M, dt);
+    }
     if (s->wp_check) wp_track(s, depth_m, pa_now);
     if (s->in_ascent && s->out && s->out->decozone_start_m <= 0) {
         for (int i = 0; i < s->ncomp; i++)
-            if (s->pn2[i] + s->phe[i] + VPM_OTHER_GASES >= pa_now) {
+            if (s->pn2[i] + s->phe[i] + VPM_OTHER_GASES >= pa_now * s->vk) {
                 s->out->decozone_start_m = depth_m;
                 break;
             }
@@ -685,6 +896,14 @@ static double gf_at(const sim *s, double depth_m) {
 }
 
 static double ceiling_bar(const sim *s) {
+    if (IS_EMC(s->cfg) && !s->buhl_ceiling)
+        return s->p_surface + emc_ceiling_ft(&s->emc, s->fo2, s->cc,
+                   s->setpoint / P_SEALEVEL, s->depth * FT_PER_M) / FT_PER_M
+                   * s->bar_per_m;
+    if (IS_NAVY(s->cfg) && !s->buhl_ceiling) {
+        double x = navy_ceiling_fsw(s->navy, s->cfg->use_vval);
+        return s->p_surface + (x > 0 ? x : 0.0) / FT_PER_M * s->bar_per_m;
+    }
     /* Pure Buhlmann tolerated ambient pressure: tol = (Ptissue - a) * b,
      * with a/b weighted by the N2/He mix in each compartment.
      * Conservatism is applied on the loading side (see tick()): on-gassing
@@ -716,16 +935,13 @@ static double ceiling_bar(const sim *s) {
         return ref;
     }
     if (IS_VVAL(s->cfg)) {
-        /* MPTT(D) = MPTT0 + 1.0 * D (fsw); tolerated ambient pressure is
-         * therefore surface pressure plus the excess tension over MPTT0. */
+        /* MPTT(D) = MPTT0 + D at sea level. Cross correction at altitude:
+         * tolerated P = (P_sea + (Pt - MPTT0) / slope) / k, k = P_sea / P_site */
         for (int i = 0; i < VVAL_NC; i++) {
             double pt = s->pn2[i] + s->phe[i];
             if (pt <= 0) continue;
-            /* Mix-weighted maximum permissible tension, the same weighting
-             * Buhlmann uses for a and b. With phe = 0 this is exactly the
-             * nitrogen value, so every air schedule is untouched. */
             double m = VVAL_MPTT0_FSW[i];
-            double tol = s->p_surface + (pt - m * FSW2BAR) / VVAL_SLOPE;
+            double tol = (P_SEALEVEL + (pt - m * FSW2BAR) / VVAL_SLOPE) / s->vk;
             if (tol > worst) worst = tol;
         }
         return worst;
@@ -866,7 +1082,8 @@ static void travel(sim *s, double to_m, bool ascent) {
         if (rate < 1.0) rate = 1.0;
         double step = rate * DT;
         if (step > fabs(to_m - s->depth)) step = fabs(to_m - s->depth);
-        double mid = s->depth + dir * step / 2.0;
+        double mid = IS_NAVY(s->cfg) ? s->depth + dir * step
+                                     : s->depth + dir * step / 2.0;
         tick(s, mid, (step / rate), false);
         s->depth += dir * step;
     }
@@ -937,7 +1154,10 @@ static double narc_col(const zp_plan_line *L) {
 
 static double display_ppo2(const sim *s, double depth_m) {
     double pa = pamb(s, depth_m) / P_SEALEVEL;   /* ATA, as the original */
-    if (s->cc) return s->setpoint < pa ? s->setpoint : pa;
+    if (s->cc) {
+        double pb = pamb(s, depth_m), sp = s->setpoint < pb ? s->setpoint : pb;
+        return s->cfg->setpoint_ata ? sp / P_SEALEVEL : sp;
+    }
     return pa * s->fo2;
 }
 
@@ -945,7 +1165,6 @@ static double display_ppo2(const sim *s, double depth_m) {
 #define SUBSURF_O2_MIN     12.0
 #define SUBSURF_BREAK_MIN   6.0
 
-static bool can_surface_from_increment(const sim *s, double inc_m);
 static bool can_leave(const sim *s, double to_m);
 
 static bool on_oxygen_phase(const sim *s, double depth_m) {
@@ -1089,19 +1308,6 @@ static void select_deco_source(sim *s, double depth) {
     }
 }
 
-static bool can_surface_from_increment(const sim *s, double inc_m) {
-    sim c = *s;
-    while (c.depth - inc_m > 1e-9) {
-        double rate = rate_for(c.cfg->ascent, c.cfg->n_ascent, c.depth, 10.0);
-        double step = rate * DT;
-        if (step > c.depth - inc_m) step = c.depth - inc_m;
-        double mid = c.depth - step / 2.0;
-        tick(&c, mid, step / rate, false);
-        c.depth -= step;
-    }
-    return (ceiling_bar(&c) - c.p_surface) / c.bar_per_m <= 1e-6;
-}
-
 static bool can_leave(const sim *s, double to_m) {
     sim c = *s;
     if (s->cfg->use_gf && s->gf_force <= 0) {
@@ -1121,8 +1327,7 @@ static bool can_leave(const sim *s, double to_m) {
 typedef struct { double depth; double time_min; } extra_stop;
 
 static double run_air_break(sim *s, double here, zp_result *out,
-                            bool lst_do0, double gg, double stop_iv,
-                            double *seg_start, int *breaks_here)
+                            double gg, double *seg_start, int *breaks_here)
 {
     const zp_config *c = s->cfg;
     double bfo2, bfhe; bool chosen_bad = false;
@@ -1143,8 +1348,7 @@ static double run_air_break(sim *s, double here, zp_result *out,
         double t = c->air_break_min;
         while (t > 1e-9) { double dt = t < DT ? t : DT;
                            tick(&probe, here, dt, false); t -= dt; }
-        bool done = lst_do0 ? can_surface_from_increment(&probe, stop_iv)
-                            : can_leave(&probe, gg);
+        bool done = can_leave(&probe, gg);
         if (done) { s->on_o2_min = 0; return 0; }
     }
     double o_fo2 = s->fo2, o_fhe = s->fhe;
@@ -1188,10 +1392,6 @@ static double run_air_break(sim *s, double here, zp_result *out,
     return c->air_break_min;
 }
 
-static double round_to_stop_base(double d, double interval, double base) {
-    if (d <= base + 1e-9) return base;
-    return base + ceil((d - base) / interval - 1e-9) * interval;
-}
 static double round_to_stop(double d, double interval) {
     double n = ceil(d / interval - 1e-9);
     return n * interval;
@@ -1215,6 +1415,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
              : (cfg->use_1b ? ZP_COMPARTMENTS : ZP_COMPARTMENTS - 1);
 
     s->gf_ref_depth = -1.0;
+    s->vk = (IS_VVAL(cfg) && cfg->altitude_m > 1e-9) ? P_SEALEVEL / s->p_surface : 1.0;
 
     if (IS_VPM(cfg)) {
         memset(VPM.max_crush_n2, 0, sizeof VPM.max_crush_n2);
@@ -1226,8 +1427,9 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     double pn2_alt = alveolar(s->p_surface) * 0.79;
     double pn2_sea = alveolar(P_SEALEVEL)   * 0.79;
     if (IS_VVAL(cfg)) {
-        pn2_alt = (s->p_surface - VVAL_H2O_BAR) * 0.79;
-        pn2_sea = (P_SEALEVEL   - VVAL_H2O_BAR) * 0.79;
+        /* scaled tensions: equilibrated = sea-level value, just arrived = k times it */
+        pn2_alt = (P_SEALEVEL - VVAL_H2O_BAR) * 0.79;
+        pn2_sea = pn2_alt * s->vk;
     }
     if (IS_VPM(cfg)) {
         pn2_alt = (s->p_surface - VPM_WV_BAR) * 0.79;
@@ -1238,7 +1440,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
     for (int i = 0; i < ZP_COMPARTMENTS; i++) {
         double start;
         if (cfg->have_initial_tissues) {
-            start = cfg->init_pn2[i];
+            start = cfg->init_pn2[i] * s->vk;
         } else if (cfg->altitude_equilibrated || cfg->altitude_m <= 1e-9) {
             start = pn2_alt;
         } else {
@@ -1247,9 +1449,71 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             start = pn2_alt + (pn2_sea - pn2_alt) * exp(-M_LN2 * hrs * 60.0 / ht);
         }
         s->pn2[i] = start;
-        s->phe[i] = cfg->have_initial_tissues ? cfg->init_phe[i] : 0.0;
+        s->phe[i] = cfg->have_initial_tissues ? cfg->init_phe[i] * s->vk : 0.0;
     }
     s->cns = cfg->have_initial_tissues ? cfg->init_cns_pct : 0.0;
+    if (IS_EMC(cfg)) {
+        if (cfg->altitude_m > 1e-9) {
+            warn(s, "The EMC-20H model is planned at sea level only: the "
+                    "Cochran altitude handling has not been reconstructed. "
+                    "No schedule has been computed.");
+            out->n_lines = 0;
+            out->refused = true;
+            return 0;
+        }
+        emc_init(&s->emc, cfg);
+        if (cfg->have_initial_emc && cfg->surface_interval_min > 0)
+            emc_surface(&s->emc, cfg->surface_interval_min);
+    }
+    if (IS_NAVY(cfg)) {
+        const char *nm = navy_name(cfg->use_vval);
+        char m[480];
+        bool any_he = false, any_oc = false, sp_off = false;
+        double dmax = 0;
+        for (int w = 0; w < cfg->n_wp; w++) {
+            if (cfg->wp[w].fhe > 0.001) any_he = true;
+            if (!cfg->wp[w].cc) any_oc = true;
+            else if (fabs(cfg->wp[w].setpoint / P_SEALEVEL - 1.3) > 0.005
+                     || cfg->wp[w].slide_max > 0)
+                sp_off = true;
+            if (cfg->wp[w].depth_m > dmax) dmax = cfg->wp[w].depth_m;
+        }
+        for (int i = 0; cfg->use_oc_deco && i < cfg->n_oc_deco; i++) {
+            any_oc = true;
+            if (cfg->oc_deco_fhe[i] > 0.001) any_he = true;
+        }
+        const char *why = NULL;
+        if (cfg->altitude_m > 1e-9)
+            why = "is planned at sea level only, as the NEDU tables are";
+        else if (cfg->use_vval == ZP_MODEL_VVAL18 && any_he)
+            why = "involves air and nitrox only; the NEDU set has no helium. "
+                  "Use XVal-He-4B or XVal-He-4 for helium dives";
+        else if (cfg->have_initial_tissues && !cfg->have_initial_navy)
+            why = "cannot continue a tissue file that holds no U.S. Navy "
+                  "tensions: the previous dive was planned with another model";
+        if (why) {
+            snprintf(m, sizeof m, "%s %s. No schedule has been computed.", nm, why);
+            warn(s, m);
+            out->n_lines = 0;
+            out->refused = true;
+            return 0;
+        }
+        navy_init(s->navy, cfg);
+        if (cfg->have_initial_navy && cfg->surface_interval_min > 0)
+            navy_surface(s->navy, cfg->surface_interval_min);
+        if (cfg->use_vval != ZP_MODEL_VVAL18
+            && (any_oc || sp_off || dmax * FT_PER_M > 200.0 + 1e-6)) {
+            snprintf(m, sizeof m,
+                "%s was validated only for the MK 16 MOD 1 rebreather at a "
+                "constant 1.3 atm PO2 in helium, to 200 fsw (61 m). This plan "
+                "is outside that (%s%s%s) and is an extrapolation of the "
+                "Navy model.", nm,
+                dmax * FT_PER_M > 200.0 + 1e-6 ? "deeper than 200 fsw" : "",
+                (dmax * FT_PER_M > 200.0 + 1e-6 && (any_oc || sp_off)) ? ", " : "",
+                any_oc ? "open circuit" : sp_off ? "setpoint not 1.3 ata" : "");
+            warn(s, m);
+        }
+    }
     s->cns_armed = false;
     s->cc_cns_warned = false;
     s->chosen_gas_warned = false;
@@ -1281,7 +1545,8 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         }
         s->cns *= exp(-M_LN2 * t / 90.0);   /* 90-min O2 half-time */
     }
-    if (cfg->conservatism_pct > 0 && !(cfg->use_gf && !IS_VVAL(cfg)) && !IS_VPM(cfg)) {
+    if (cfg->conservatism_pct > 0 && !(cfg->use_gf && !IS_VVAL(cfg)) && !IS_VPM(cfg)
+        && !IS_EMC(cfg) && !IS_NAVY(cfg)) {
         double c = cfg->conservatism_pct / 100.0;
         if (c > 0.5) c = 0.5;
         double fn2 = 1.0, fhe = 0.0, dmax = -1.0;
@@ -1386,6 +1651,20 @@ static int run_plan(const zp_config *cfg, zp_result *out,
 
     double stop_iv = cfg->stop_distance_m > 0 ? cfg->stop_distance_m : 3.0;
     double last_stop = cfg->last_stop_depth_m > 0 ? cfg->last_stop_depth_m : 3.0;
+    /* Cross correction: stop depth at altitude = sea-level stop depth / k */
+    stop_iv /= s->vk; last_stop /= s->vk;
+    if (s->vk > 1.0) {
+        bool met = cfg->metric_output;
+        char m[400];
+        snprintf(m, sizeof m,
+            "VVAL-79 at altitude: Cross correction applied, as in the U.S. "
+            "Navy Diving Manual. The schedule is the sea-level schedule for "
+            "the sea level equivalent depth, %.1f %s (actual depth x %.3f), "
+            "and each stop is at its sea-level depth divided by %.3f.",
+            max_depth * s->vk * (met ? 1.0 : FT_PER_M), met ? "m" : "ft",
+            s->vk, s->vk);
+        warn(s, m);
+    }
     double first_norm = -1;
     int deep_idx = 0;
 
@@ -1441,7 +1720,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         double g;
         if (s->depth <= last_stop + 1e-9) g = 0;
         else {
-            g = last_stop + ceil((s->depth - last_stop) / stop_iv - 1.0 - 1e-9) * stop_iv;
+            g = (ceil(s->depth / stop_iv - 1e-9) - 1.0) * stop_iv;
             if (g < last_stop) g = last_stop;
             if (g >= s->depth - 1e-9) g = s->depth - stop_iv;
             if (g < 0) g = 0;
@@ -1490,7 +1769,8 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             continue;
         }
 
-        double here = round_to_stop_base(s->depth, stop_iv, last_stop);
+        double here = s->depth <= last_stop + 1e-9 ? last_stop
+                    : round_to_stop(s->depth, stop_iv);
         if (here < last_stop) here = last_stop;
         if (fabs(here - s->depth) > 1e-6) travel(s, here, true);
 
@@ -1508,7 +1788,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
                              fabs(s->fhe - stop_pre_fhe) > 1e-6 ||
                              s->cc != stop_pre_cc;
 
-        double quantum = 1.0;
+        double quantum = IS_EMC(cfg) ? 1.0 / 60.0 : 1.0;
         if (here <= last_stop + 1e-9 && cfg->deepstops != ZP_DEEPSTOPS_NONE
             && !IS_VPM(cfg))
             quantum = 0.1;
@@ -1528,11 +1808,9 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         bool at_last = (here <= last_stop + 1e-9);
         double gg = at_last ? 0
                   : (here - stop_iv < last_stop ? last_stop : here - stop_iv);
-        bool lst_do0 = at_last && IS_VVAL(cfg);
 
         if (IS_VPM(cfg)) {
-            bool need = (lst_do0 ? !can_surface_from_increment(s, stop_iv)
-                                 : !can_leave(s, gg)) || min_time > 1e-9
+            bool need = !can_leave(s, gg) || min_time > 1e-9
                         || vpm_is_first_stop;
             if (need) {
                 if (vpm_prev_rt < 0) vpm_prev_rt = floor(arrive_rt + 1e-9);
@@ -1545,9 +1823,9 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             }
         }
 
-        while (((lst_do0 ? !can_surface_from_increment(s, stop_iv)
-                         : !can_leave(s, gg)) || stop_time < min_time - 1e-9)
-               && stop_time < 24.0*60.0) {
+        double stop_cap = IS_NAVY(cfg) ? NAVY_MAX_STOP_MIN : 24.0 * 60.0;
+        while ((!can_leave(s, gg) || stop_time < min_time - 1e-9)
+               && stop_time < stop_cap) {
             if (s->cc && cfg->air_break_mode != ZP_AB_OFF &&
                 s->cns >= cfg->cns_break_pct - 1e-9 && !s->cc_cns_warned) {
                 s->cc_cns_warned = true;
@@ -1565,7 +1843,7 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             }
             if (break_phase(s, here) &&
                 s->on_o2_min >= cfg->o2_period_min - 1e-9) {
-                double bt = run_air_break(s, here, out, lst_do0, gg, stop_iv,
+                double bt = run_air_break(s, here, out, gg,
                                           &seg_start, &breaks_here);
                 if (bt > 1e-9) { stop_time += bt; continue; }
             }
@@ -1575,11 +1853,27 @@ static int run_plan(const zp_config *cfg, zp_result *out,
             if (break_phase(s, here)) s->on_o2_min += quantum;
         }
 
+        if (IS_NAVY(cfg) && stop_time >= NAVY_MAX_STOP_MIN - 1e-9 && !can_leave(s, gg)) {
+            bool met = cfg->metric_output;
+            char m[320];
+            snprintf(m, sizeof m,
+                "%s has no schedule for this dive: the %.0f %s stop does not "
+                "clear within %.0f minutes.%s", navy_name(cfg->use_vval),
+                here * (met ? 1.0 : FT_PER_M), met ? "m" : "ft", NAVY_MAX_STOP_MIN,
+                cfg->use_vval == ZP_MODEL_XVALHE4
+                ? " XVal-He-4 cannot plan dives deeper than about 210 fsw "
+                  "(64 m); XVal-He-4B, the same set without the 5-minute "
+                  "compartment, can." : "");
+            warn(s, m);
+            out->n_lines = 0;
+            out->refused = true;
+            return 0;
+        }
         if (stop_time > 1e-9 && IS_VPM(cfg)) {
             stop_time = s->runtime - vpm_prev_rt;
             vpm_prev_rt = s->runtime;
         }
-        else if (stop_time > 1e-9 && !IS_VVAL(cfg)) {
+        else if (stop_time > 1e-9 && !IS_VVAL(cfg) && !IS_EMC(cfg) && !IS_NAVY(cfg)) {
             double leg = arrive_rt - leg_start;
             double total = leg + stop_time;
             double want = ceil(total - 1e-9);
@@ -1665,23 +1959,33 @@ static int run_plan(const zp_config *cfg, zp_result *out,
         out->gas_fhe[i] = s->gas_fhe[i];
         out->total_oc_l += s->gas_l[i];
     }
-    memcpy(out->end_pn2, s->pn2, sizeof s->pn2);
-    memcpy(out->end_phe, s->phe, sizeof s->phe);
+    for (int i = 0; i < ZP_COMPARTMENTS; i++) {
+        out->end_pn2[i] = s->pn2[i] / s->vk;
+        out->end_phe[i] = s->phe[i] / s->vk;
+    }
     out->end_cns_pct = s->cns;
+    out->has_emc = IS_EMC(cfg);
+    if (out->has_emc) memcpy(out->end_emc, s->emc.t, sizeof out->end_emc);
+    out->has_navy = IS_NAVY(cfg);
+    if (out->has_navy) memcpy(out->end_navy, s->navy, sizeof out->end_navy);
 
     if (IS_VPM(cfg)) vpm_surface_phase(s);
 
     {
         double p_cabin = pow(1.0 - 2.25577e-5 * FLY_ALT_M, 5.25588); /* bar,
                      matches original's stricter (unit-conflated) threshold */
-        double pn2s = alveolar(s->p_surface) * 0.79;
+        double pn2s = IS_VVAL(cfg) ? pn2_alt : alveolar(s->p_surface) * 0.79;
         double mins = 0;
+        s->buhl_ceiling = true;
+        if (cfg->use_gf) s->gf_force = cfg->gf_hi > 0 ? cfg->gf_hi : 0.85;
         while (mins < 96.0 * 60.0) {
             if (ceiling_bar(s) <= p_cabin) break;
             double step = 3.0; /* minutes */
             for (int i = 0; i < ZP_COMPARTMENTS; i++) {
-                s->pn2[i] = pn2s + (s->pn2[i]-pn2s)*exp(-M_LN2*step/N2_HT[i]);
-                s->phe[i] = s->phe[i]*exp(-M_LN2*step/HE_HT[i]);
+                double hn = N2_HT[i], hh = HE_HT[i];
+                if (IS_VVAL(cfg)) hn = hh = VVAL_HT_N2[i < VVAL_NC ? i : VVAL_NC - 1];
+                s->pn2[i] = pn2s + (s->pn2[i]-pn2s)*exp(-M_LN2*step/hn);
+                s->phe[i] = s->phe[i]*exp(-M_LN2*step/hh);
             }
             mins += step;
         }
@@ -1761,6 +2065,10 @@ static int zp_plan_pass(const zp_config *cfg, zp_result *out) {
 }
 
 int zp_plan(const zp_config *cfg, zp_result *out) {
+    if (IS_EMC(cfg) || IS_NAVY(cfg)) {
+        ((zp_config *)cfg)->use_gf = false;
+        ((zp_config *)cfg)->deepstops = ZP_DEEPSTOPS_NONE;
+    }
     if (!IS_VPM(cfg)) return zp_plan_pass(cfg, out);
 
     vpm_clear();
@@ -1786,6 +2094,50 @@ int zp_plan(const zp_config *cfg, zp_result *out) {
         VPM.deco_min = deco;
     }
     return rc;
+}
+
+int zp_emc_tissue_line(const zp_result *res, char *buf, size_t buflen) {
+    if ((!res->has_emc && !res->has_navy) || buflen == 0) { if (buflen) buf[0] = 0; return 0; }
+    size_t off = 0;
+    int nc = res->has_emc ? ZP_EMC_COMPARTMENTS : ZP_NAVY_COMPARTMENTS;
+    const double *v = res->has_emc ? res->end_emc : res->end_navy;
+    int n = snprintf(buf, buflen, res->has_emc ? "EMC:" : "NAVY:");
+    if (n > 0) off = (size_t)n;
+    for (int i = 0; i < nc && off < buflen; i++) {
+        n = snprintf(buf + off, buflen - off, " %.6f", v[i]);
+        if (n > 0) off += (size_t)n;
+    }
+    if (off < buflen) { n = snprintf(buf + off, buflen - off, "\n"); if (n > 0) off += (size_t)n; }
+    return (int)(off < buflen ? off : buflen - 1);
+}
+
+bool zp_read_emc_tissue_line(const char *line, zp_config *cfg) {
+    while (isspace((unsigned char)*line)) line++;
+    if (!strncmp(line, "NAVY:", 5)) {
+        const char *q = line + 5;
+        double v[ZP_NAVY_COMPARTMENTS];
+        for (int i = 0; i < ZP_NAVY_COMPARTMENTS; i++) {
+            char *end = NULL;
+            v[i] = strtod(q, &end);
+            if (end == q) return false;
+            q = end;
+        }
+        memcpy(cfg->init_navy, v, sizeof v);
+        cfg->have_initial_navy = true;
+        return true;
+    }
+    if (strncmp(line, "EMC:", 4)) return false;
+    const char *p = line + 4;
+    double v[ZP_EMC_COMPARTMENTS];
+    for (int i = 0; i < ZP_EMC_COMPARTMENTS; i++) {
+        char *end = NULL;
+        v[i] = strtod(p, &end);
+        if (end == p) return false;
+        p = end;
+    }
+    memcpy(cfg->init_emc, v, sizeof v);
+    cfg->have_initial_emc = true;
+    return true;
 }
 
 void zp_config_init(zp_config *cfg) {
@@ -1816,6 +2168,9 @@ void zp_config_init(zp_config *cfg) {
     cfg->break_gas_fhe   = 0.0;
     cfg->travel_gas      = false;
     cfg->o2_trigger_fo2  = 1.00;
+    cfg->emc_water_temp_f = 75.0;
+    cfg->emc_temp_comp    = 0;
+    cfg->emc_workload     = 5.0 / 256.0;
 }
 
 static bool truthy(const char *v) { return *v=='y'||*v=='Y'||*v=='1'; }
@@ -1857,6 +2212,8 @@ int zp_parse_profile(const char *text, zp_config *cfg,
             v2l = metric ? 1.0 : L_PER_CUFT;
         } else if (!strcmp(k2, "rmvmetric")) {
             cfg->rmv_metric = truthy(v2) ? 1 : 0;
+        } else if (!strcmp(k2, "setpointunit")) {
+            cfg->setpoint_ata = tolower((unsigned char)v2[0]) == 'a';
         }
     }
 
@@ -1921,6 +2278,20 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 if (cfg->vpm_conservatism > 4) cfg->vpm_conservatism = 4;
             }
             else if (!strcmp(key, "vpmradiusn2")) cfg->vpm_radius_n2_um = atof(val);
+            else if (!strcmp(key, "watertemp"))
+                cfg->emc_water_temp_f = metric ? atof(val) * 9.0 / 5.0 + 32.0
+                                               : atof(val);
+            else if (!strcmp(key, "tempcomp")) {
+                char c0 = (char)tolower((unsigned char)val[0]);
+                char c1 = (char)tolower((unsigned char)val[1]);
+                cfg->emc_temp_comp = (c0 == 'h' || c0 == '2' || c0 == 'y') ? 2
+                                   : (c0 == 'l' || c0 == 'r' || c0 == '1') ? 1
+                                   : (c0 == 'o' && c1 == 'n') ? 2 : 0;
+            }
+            else if (!strcmp(key, "workload")) {
+                double v = atof(val);
+                cfg->emc_workload = v > 0 ? v / 1000.0 : 5.0 / 256.0;
+            }
             else if (!strcmp(key, "vpmradiushe")) cfg->vpm_radius_he_um = atof(val);
             else if (!strcmp(key, "tissuefile")) { }
             else if (!strcmp(key, "surfaceinterval")) {
@@ -1947,8 +2318,18 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 char v[32]; strncpy(v, val, sizeof v - 1); v[sizeof v - 1] = 0;
                 trim(v);
                 for (char *q = v; *q; q++) *q = (char)tolower((unsigned char)*q);
-                if (!strncmp(v, "vval", 4)) cfg->use_vval = ZP_MODEL_VVAL79;
+                if (!strncmp(v, "xval-he-4b", 10) || !strncmp(v, "xvalhe4b", 8)
+                    || !strncmp(v, "xhe4b", 5))
+                    cfg->use_vval = ZP_MODEL_XVALHE4B;
+                else if (!strncmp(v, "xval-he-4", 9) || !strncmp(v, "xvalhe4", 7)
+                         || !strncmp(v, "xhe4", 4))
+                    cfg->use_vval = ZP_MODEL_XVALHE4;
+                else if (!strncmp(v, "vval-18", 7) || !strncmp(v, "vval18", 6))
+                    cfg->use_vval = ZP_MODEL_VVAL18;
+                else if (!strncmp(v, "vval", 4)) cfg->use_vval = ZP_MODEL_VVAL79;
                 else if (!strncmp(v, "vpm", 3)) cfg->use_vval = ZP_MODEL_VPMB;
+                else if (!strncmp(v, "emc", 3) || !strncmp(v, "cochran", 7))
+                    cfg->use_vval = ZP_MODEL_EMC20H;
                 else {
                     cfg->use_vval = ZP_MODEL_BUHLMANN;
                     if (strncmp(v, "buhl", 4) && strncmp(v, "zhl", 3) &&
@@ -1962,7 +2343,9 @@ int zp_parse_profile(const char *text, zp_config *cfg,
             else if (!strcmp(key, "compartment1b")) cfg->use_1b = truthy(val);
             else if (!strcmp(key, "ndlgf")) cfg->ndl_gf_low = (*val=='l'||*val=='L');
             else if (!strcmp(key, "gfhigh")) { cfg->gf_hi = atof(val) > 1.0 ? atof(val)/100.0 : atof(val); cfg->use_gf = true; }
-            else if (!strcmp(key, "sliderate")) cfg->slide_rate = atof(val);
+            else if (!strcmp(key, "sliderate"))
+                cfg->slide_rate = atof(val) * (cfg->setpoint_ata ? P_SEALEVEL : 1.0);
+            else if (!strcmp(key, "setpointunit")) { }
             else if (!strcmp(key, "useocdeco")) cfg->use_oc_deco = truthy(val);
             else if (!strcmp(key, "ocdecogas")) {
                 cfg->n_oc_deco = 0;
@@ -2046,7 +2429,8 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                     cfg->n_deco_sp < ZP_MAX_SETPOINTS) {
                     cfg->deco_sp[cfg->n_deco_sp].from_m = a * d2m;
                     cfg->deco_sp[cfg->n_deco_sp].to_m   = b * d2m;
-                    cfg->deco_sp[cfg->n_deco_sp].setpoint = sp;
+                    cfg->deco_sp[cfg->n_deco_sp].setpoint =
+                        sp * (cfg->setpoint_ata ? P_SEALEVEL : 1.0);
                     cfg->n_deco_sp++;
                 }
             }
@@ -2077,8 +2461,9 @@ int zp_parse_profile(const char *text, zp_config *cfg,
                 trim(f4);
                 char *dash = strchr(f4, '-');
                 w->cc = true;
-                w->setpoint = atof(f4);
-                if (dash) w->slide_max = atof(dash + 1);
+                double spu = cfg->setpoint_ata ? P_SEALEVEL : 1.0;
+                w->setpoint = atof(f4) * spu;
+                if (dash) w->slide_max = atof(dash + 1) * spu;
             }
             cfg->n_wp++;
         }
@@ -2110,13 +2495,28 @@ int zp_report(const zp_config *cfg, const zp_result *res,
 
     APP("                          v%s\n", zp_version());
     if (res->refused) {
-        APP("              U.S. Navy EL-DCM (VVAL-79)\n\n");
+        if (IS_EMC(cfg)) APP("                  Cochran EMC-20H\n\n");
+        else if (IS_NAVY(cfg)) APP("        U.S. Navy %s\n\n", navy_name(cfg->use_vval));
+        else APP("              U.S. Navy EL-DCM (VVAL-79)\n\n");
         APP("                     NO PLAN COMPUTED\n\n");
         if (res->warnings[0]) APP("%s", res->warnings);
         return (int)off;
     }
     if (IS_VVAL(cfg))
         APP("              U.S. Navy EL-DCM (VVAL-79)\n\n");
+    else if (IS_NAVY(cfg))
+        APP("        U.S. Navy %s\n        NEDU table conventions, stops in whole minutes\n\n",
+            navy_name(cfg->use_vval));
+    else if (IS_EMC(cfg)) {
+        APP("        Cochran EMC-20H  conservatism %.0f%%\n",
+            cfg->conservatism_pct);
+        if (cfg->emc_temp_comp > 0)
+            APP("        water %.0f%s, temperature compensation %s\n",
+                metric ? (cfg->emc_water_temp_f - 32.0) * 5.0 / 9.0
+                       : cfg->emc_water_temp_f,
+                metric ? "C" : "F", cfg->emc_temp_comp == 1 ? "low" : "high");
+        APP("\n");
+    }
     else if (IS_VPM(cfg))
         APP("        VPM-B  (Yount/Hoffman, Baker)  conservatism %d\n\n",
             cfg->vpm_conservatism);
@@ -2137,6 +2537,13 @@ int zp_report(const zp_config *cfg, const zp_result *res,
             APP("        Altitude %.0f%s, diver just arrived\n\n",
                 cfg->altitude_m * dscale, du);
     }
+    {
+        bool any_cc = false;
+        for (int w = 0; w < cfg->n_wp; w++) if (cfg->wp[w].cc) any_cc = true;
+        if (any_cc)
+            APP("                  CCR setpoints in %s\n\n",
+                cfg->setpoint_ata ? "ata" : "bar");
+    }
     APP("                        DIVE PLAN\n\n");
     APP("        depth   stop    run   gas       PO2   EAD\n");
     APP(" ------------------------------------------------------\n");
@@ -2153,7 +2560,8 @@ int zp_report(const zp_config *cfg, const zp_result *res,
                                 (L->cc && fabs(L->setpoint - psp) > 1e-6));
             char gas[48];
             if (L->cc)
-                snprintf(gas, sizeof gas, "SP%.2f", L->setpoint);
+                snprintf(gas, sizeof gas, "SP%.2f",
+                         L->setpoint / (cfg->setpoint_ata ? P_SEALEVEL : 1.0));
             else if (L->fhe > 0.001)
                 snprintf(gas, sizeof gas, "TMX %.0f/%.0f", L->fo2*100, L->fhe*100);
             else if (fabs(L->fo2 - 0.21) < 0.005)

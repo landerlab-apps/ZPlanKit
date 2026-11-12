@@ -41,6 +41,8 @@ extern "C" {
 #define ZP_MAX_SETPOINTS   16
 #define ZP_MAX_PLAN_LINES  256
 #define ZP_COMPARTMENTS    17
+#define ZP_EMC_COMPARTMENTS 20
+#define ZP_NAVY_COMPARTMENTS 9
 
 typedef enum {
     ZP_DEEPSTOPS_NONE = 0,
@@ -54,7 +56,7 @@ typedef struct {
     double fo2;          /* fraction 0..1 */
     double fhe;          /* fraction 0..1 */
     bool   cc;           /* closed circuit? */
-    double setpoint;     /* PO2 bar, if cc */
+    double setpoint;     /* PO2 bar, if cc (converted from ata when entered so) */
     double slide_max;    /* Scamahorn slide max PO2 (0 = none) */
 } zp_waypoint;
 
@@ -74,7 +76,8 @@ typedef struct {
     double vpm_radius_n2_um;
     double vpm_radius_he_um;
     int    rmv_metric;         /* -1 follow UseMetric, 0 cu.ft, 1 litres */
-    double slide_rate;         /* Scamahorn slide: PO2 burned off per minute */
+    double slide_rate;         /* Scamahorn slide: PO2 burned off per minute, bar */
+    bool   setpoint_ata;       /* SetpointUnit: setpoints entered in ata (else bar) */
     bool   use_1b;            /* include Buhlmann's optional 1b compartment */
     bool   ndl_gf_low;         /* NDL check uses GF-low (default: GF-high) */
     double altitude_m;
@@ -119,6 +122,15 @@ typedef struct {
     double init_phe[ZP_COMPARTMENTS];
     double init_cns_pct;
     double surface_interval_min; /* applied to initial tissues before dive */
+    /* Cochran EMC-20H (Model: emc20h) */
+    double emc_water_temp_f;   /* water temperature, deg F */
+    int    emc_temp_comp;      /* 0 off, 1 low, 2 high */
+    double emc_workload;       /* W term; 5/256 nominal, else flow L/min / 1000 */
+    bool   have_initial_emc;
+    double init_emc[ZP_EMC_COMPARTMENTS]; /* tensions, EAD fsw */
+    /* U.S. Navy exact (Model: XVal-He-4B, XVal-He-4, VVAL-18 air) */
+    bool   have_initial_navy;
+    double init_navy[ZP_NAVY_COMPARTMENTS]; /* tensions, fsw absolute */
 } zp_config;
 
 typedef enum {
@@ -162,6 +174,10 @@ typedef struct {
     double end_pn2[ZP_COMPARTMENTS];
     double end_phe[ZP_COMPARTMENTS];
     double end_cns_pct;
+    bool   has_emc;
+    double end_emc[ZP_EMC_COMPARTMENTS];  /* EMC-20H tensions, EAD fsw */
+    bool   has_navy;
+    double end_navy[ZP_NAVY_COMPARTMENTS]; /* U.S. Navy tensions, fsw absolute */
     char   warnings[2048];
 } zp_result;
 
@@ -177,6 +193,14 @@ int zp_plan(const zp_config *cfg, zp_result *out);
 /* Render a ZPlan-style text report into buf. Returns bytes written. */
 int zp_report(const zp_config *cfg, const zp_result *res,
               char *buf, size_t buflen);
+
+/* Model tensions in a tissue file: one "EMC:" line of 20 values (EAD fsw)
+ * after an EMC-20H plan, or one "NAVY:" line of 9 values (fsw absolute)
+ * after a U.S. Navy exact plan. zp_emc_tissue_line writes it (0 bytes when
+ * the plan carries none); zp_read_emc_tissue_line returns true and fills cfg
+ * when the line is one of them. */
+int  zp_emc_tissue_line(const zp_result *res, char *buf, size_t buflen);
+bool zp_read_emc_tissue_line(const char *line, zp_config *cfg);
 
 /* Library version string */
 const char *zp_version(void);

@@ -110,11 +110,12 @@ extension Color {
 // MARK: - Disclaimer
 
 /// Shown by the Info button and reproduced in the documentation of every build.
-/// `algorithms` names the models the build actually ships, so Lplanner says
-/// VVAL-79 not VVAL-18.
+/// `algorithms` names the models the build actually ships.
 public struct Disclaimer {
     public static var algorithms =
-        "A. A. Buhlmann's algorithm, the VVAL-79 algorithm, or the VPM-B algorithm"
+        "A. A. Buhlmann's algorithm, the VVAL-79 algorithm, the VPM-B algorithm, the "
+        + "Cochran EMC-20H algorithm, or the U.S. Navy XVal-He-4B, XVal-He-4 and VVAL-18 "
+        + "parameter sets"
 
     public static var text: String {
         "This generated dive schedule could indirectly kill you and probably has "
@@ -134,6 +135,8 @@ public struct Manual {
 
     CLOSED CIRCUIT
     Tap the OC chip so it reads CCR — on a tablet, switch Open to Closed. Set (setpoint), then Sld (Scamahorn slide) appears beside the mix.
+
+    CCR setpoint unit, bar or ata, is chosen in Configuration under Deco Set Point (CCR). It applies to every model, to Set, Sld, the deco setpoints and the slide rate, and the plan prints it above the schedule. 1 ata = 1.01325 bar, so 1.3 ata is 1.317 bar.
 
     DECO GASES
     Click Yes and list the mixes (e.g., 50, 100). The planner picks the richest one allowed by Max PO2 and Max END. The new mix appears in the gas column of the stop where you change onto it. If the switch depth is not a stop, a GasSw row marks it instead. Config can also hold you there for a few extra minutes — see Extended stops.
@@ -240,6 +243,10 @@ public struct ConfigGuide {
 
     VVAL-79 is the U.S. Navy Thalmann EL-DCM (exponential uptake, linear elimination) with the VVal-79 air parameter set behind the Diving Manual Revision 7 air tables. It plans AIR AND NITROX ONLY: the Navy publishes no helium parameters for it, so a dive carrying helium is REFUSED rather than computed.
 
+    EMC-20H is the Cochran Undersea Technology model of the EMC-20H computer, reconstructed from the Cochran Analyst planning engine: 20 compartments in equivalent-air-depth units, one combined inert-gas tension, nitrogen and helium limits blended by the gas breathed, and a depth factor that carries conservatism, workload, cold water and a running deep-stop credit. It starts decompression deep and finishes fast. It is planned at sea level only. Pyle deep stops and gradient factors do not apply; with a 10 ft (3.048 m) stop distance it reproduces Cochran Analyst plans.
+
+    XVal-He-4B (NEDU TR 10-04), XVal-He-4 (NEDU TR 02-10) and VVAL-18 air (NEDU TR 07-09) are the U.S. Navy Thalmann parameter sets run as the NEDU table programs run them: 33 fsw per atmosphere, helium and nitrogen summed into one inert tension, one-second steps, stops in whole minutes, and the last stop left on the surfacing limits. The last stop defaults to 20 fsw (6 m); 10 fsw (3 m) can be selected. The two XVal-He sets were validated only for the MK 16 MOD 1 at a constant 1.3 atm PO2 in helium, to 200 fsw (61 m); any other plan carries a warning and is an extrapolation. XVal-He-4 has no schedule deeper than about 210 fsw; XVal-He-4B is the same set without the 5-minute compartment and has no such limit. VVAL-18 air plans air and nitrox only. The Navy validation setpoint is 1.3 ata: enter 1.3 with the setpoint unit set to ata. These models are planned at sea level only; Conservatism, gradient factors and Pyle stops do not apply. VVAL-18 is the 2007 research set (TR 07-09), not the VVal-18M of the Diving Manual tables.
+
     VPM-B is the Yount/Hoffman varying permeability bubble model in Erik Baker's implementation. It limits the volume of gas released from bubble nuclei rather than the tension dissolved in tissue, which is why it puts the first stop much deeper, especially on helium mixes.
 
     VPM-B
@@ -254,7 +261,10 @@ public struct ConfigGuide {
     CONDITIONS
     Altitude of the dive site, 0 for sea level.
 
-    CONSERVATISM applies only to ZHL16-C with gradient factors off. It (0-50 %) preloads the compartments with extra inert gas, weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.
+    EMC-20H
+    Temperature compensation Off, Low or High adds a cold-water term below 24 °C / 75 °F, half as large on Low. Workload is the gas flow in L/min; blank is Cochran's nominal workload. Conservatism (0–50 %, set in the EMC-20H group) is added to the depth factor as Cochran does, C/200, not preloaded into the compartments; it is kept separate from the ZHL16-C setting.
+
+    CONSERVATISM applies only to ZHL16-C with gradient factors off, and to EMC-20H (see above); the U.S. Navy models do not use it. For ZHL16-C it (0-50 %) preloads the compartments with extra inert gas, weighted from the fast compartments (none) to the slow ones (the full percentage), as if a previous dive had been made. Zero is the clean-diver profile.
 
     STOP DEPTHS
     Stop distance is the interval between decompression stops — 3 m is the convention; some rebreather divers prefer 6 m. Last stop is the depth of the final stop, chosen from 3, 4.5, 5, 6 or 9 m (10, 15, 20 or 30 ft); some prefer pulling the 3 m stop deeper. The grid is built upward from the last stop, so 4.5 m with 3 m stops gives 4.5, 7.5, 10.5 m. Both apply to every schedule, regardless of model, gradient factors, or deep stops.
@@ -352,6 +362,9 @@ struct PlannerState: Codable {
     var decoGasesOn = true, decoGases = "50"
     var circuitClosed = false, plus3m = false, plus5min = false, useAltGF = false
     var travelGas = false
+    var emcWaterTemp: String? = nil, emcTempComp: String? = nil, emcWorkload: String? = nil
+    var emcConservatism: Double? = nil
+    var setpointAta: Bool? = nil
     var levels: [DiveLevel] = []
 
     /// Residual inert gas carried between sessions.
@@ -413,7 +426,20 @@ final class PlannerModel: ObservableObject {
     @Published var rmvMetricOverride = false
     @Published var saltWater = true             // Water: Fresh / Salt
     @Published var o2Narcotic = false           // O2 Narcotic: No / Yes
-    @Published var model = "c"                  // "c" ZHL16-C, "vval" VVAL-79, "vpm" VPM-B
+    @Published var model = "c"                  // "c" ZHL16-C, "vval" VVAL-79, "vpm" VPM-B, "emc" EMC-20H,
+                                                // "xhe4b", "xhe4", "vval18" U.S. Navy exact
+    static let navyModels: [(key: String, name: String)] = [
+        ("xhe4b", "XVal-He-4B (NEDU TR 10-04)"),
+        ("xhe4", "XVal-He-4 (NEDU TR 02-10)"),
+        ("vval18", "VVAL-18 air (NEDU TR 07-09)"),
+    ]
+    var navyName: String? { Self.navyModels.first(where: { $0.key == model })?.name }
+    var isNavy: Bool { navyName != nil }
+    // EMC-20H settings. Water temperature in the depth units' system (C or F).
+    @Published var emcWaterTemp = "24"
+    @Published var emcTempComp = "off"          // off / low / high
+    @Published var emcWorkload = ""             // L/min; blank = nominal
+    @Published var emcConservatism = 0.0        // 0-50 %, Cochran C/200 in the depth factor
     // VPM-B settings. Conservatism 0-4 scales both critical radii; 0 is
     // Baker's nominal VPM-B, which is what reproduces his published VPM.OUT.
     @Published var vpmConservatism = 0.0
@@ -449,6 +475,7 @@ final class PlannerModel: ObservableObject {
     @Published var ascentRates = "70-30, 18\n30-12, 9\n12-0, 3"
     @Published var decoSetpoints = ""           // e.g. "80-30, 1.4\n29-0, 1.2"
     @Published var slideRate = "0.1"
+    @Published var setpointAta = false          // CCR setpoints in ata, else bar
     @Published var maxPO2 = "1.6"
     @Published var maxEND = "40"
     @Published var bottomRMV = "19"
@@ -523,6 +550,7 @@ final class PlannerModel: ObservableObject {
         stopDistance = s.stopDistance; lastStop = s.lastStop
         descentRates = s.descentRates; ascentRates = s.ascentRates
         decoSetpoints = s.decoSetpoints; slideRate = s.slideRate
+        setpointAta = s.setpointAta ?? false
         maxPO2 = s.maxPO2; maxEND = s.maxEND
         bottomRMV = s.bottomRMV; decoRMV = s.decoRMV
         extStopShallow = s.extStopShallow; extStopDeep = s.extStopDeep
@@ -531,6 +559,10 @@ final class PlannerModel: ObservableObject {
         circuitClosed = s.circuitClosed
         plus3m = s.plus3m; plus5min = s.plus5min; useAltGF = s.useAltGF
         travelGas = s.travelGas
+        emcWaterTemp = s.emcWaterTemp ?? (s.depthsMetric ? "24" : "75")
+        emcTempComp = s.emcTempComp ?? "off"
+        emcWorkload = s.emcWorkload ?? ""
+        emcConservatism = s.emcConservatism ?? 0
         levels = s.levels
         baselineTissue = s.baselineTissue
         baselineDate = s.baselineDate
@@ -557,6 +589,7 @@ final class PlannerModel: ObservableObject {
         s.stopDistance = stopDistance; s.lastStop = lastStop
         s.descentRates = descentRates; s.ascentRates = ascentRates
         s.decoSetpoints = decoSetpoints; s.slideRate = slideRate
+        s.setpointAta = setpointAta
         s.maxPO2 = maxPO2; s.maxEND = maxEND
         s.bottomRMV = bottomRMV; s.decoRMV = decoRMV
         s.extStopShallow = extStopShallow; s.extStopDeep = extStopDeep
@@ -565,6 +598,9 @@ final class PlannerModel: ObservableObject {
         s.circuitClosed = circuitClosed
         s.plus3m = plus3m; s.plus5min = plus5min; s.useAltGF = useAltGF
         s.travelGas = travelGas
+        s.emcWaterTemp = emcWaterTemp; s.emcTempComp = emcTempComp
+        s.emcWorkload = emcWorkload
+        s.emcConservatism = emcConservatism
         s.levels = levels
         s.baselineTissue = baselineTissue
         s.baselineDate = baselineDate
@@ -625,11 +661,11 @@ final class PlannerModel: ObservableObject {
         if rmvMetricOverride { p += "RmvMetric: \(rmvMetric ? "y" : "n")\n" }
         p += """
         SaltWater: \(saltWater ? "y" : "n")
-        Model: \(model == "vval" ? "vval79" : model == "vpm" ? "vpm" : "zhl16c")
+        Model: \(navyName ?? (model == "vval" ? "vval79" : model == "vpm" ? "vpm" : model == "emc" ? "emc20h" : "zhl16c"))
         Altitude: \(altitude)
         AltitudeEquil: \(altitudeEquilibrated ? "y" : "n")
         HoursAtAltitude: \(hoursAtAltitude)
-        Conservatism: \(Int(conservatism))
+        Conservatism: \(Int(model == "emc" ? emcConservatism : conservatism))
         Precision: 1
         StopDistance: \(stopDistance)
         LastStopDepth: \(lastStop)
@@ -641,6 +677,7 @@ final class PlannerModel: ObservableObject {
         Rmv: \(bottomRMV)
         DecoRmv: \(decoRMV)
         SlideRate: \(slideRate)
+        SetpointUnit: \(setpointAta ? "ata" : "bar")
         UseOCDeco: \(decoGasesOn ? "y" : "n")
         OcDecoGas: \(decoGases)
         OcDecoMaxPO2: \(maxPO2)
@@ -653,6 +690,13 @@ final class PlannerModel: ObservableObject {
         BreakGas: \(breakGas)
         TravelGas: \(travelGas ? "y" : "n")
         """
+        if model == "emc" {
+            p += "\nWaterTemp: \(emcWaterTemp)"
+            p += "\nTempComp: \(emcTempComp)"
+            if let w = Double(emcWorkload.replacingOccurrences(of: ",", with: ".")), w > 0 {
+                p += "\nWorkload: \(w)"
+            }
+        }
         if model == "vpm" {
             p += "\nVpmConservatism: \(Int(vpmConservatism))"
             p += "\nVpmRadiusN2: \(vpmRadiusN2)"
@@ -731,6 +775,9 @@ final class PlannerModel: ObservableObject {
         stopDistance  = scale(stopDistance, f)
         lastStop      = snapLastStop(scale(lastStop, f), metric: metric)
         maxEND        = scale(maxEND, f)
+        if let t = Double(emcWaterTemp.replacingOccurrences(of: ",", with: ".")) {
+            emcWaterTemp = String(Int((metric ? (t - 32) * 5 / 9 : t * 9 / 5 + 32).rounded()))
+        }
         descentRates  = scaleLines(descentRates, f, skip: [])
         ascentRates   = scaleLines(ascentRates, f, skip: [])
         // "80-30, 1.4": the depths convert, the setpoint must not.
@@ -900,6 +947,11 @@ final class PlannerModel: ObservableObject {
         var modelText: String
         if model == "vval" {
             modelText = "VVAL-79"
+        } else if let n = navyName {
+            modelText = n
+        } else if model == "emc" {
+            modelText = "EMC-20H cons \(Int(emcConservatism))%"
+            if emcTempComp != "off" { modelText += " \(emcWaterTemp)\(depthsMetric ? "C" : "F")" }
         } else if model == "vpm" {
             modelText = "VPM-B +\(Int(vpmConservatism))"
         } else if gfOn {
@@ -911,11 +963,11 @@ final class PlannerModel: ObservableObject {
         }
 
         var extras: [String] = []
-        if circuitClosed { extras.append("CCR") }
+        if circuitClosed { extras.append("CCR \(setpointAta ? "ata" : "bar")") }
         if decoGasesOn && !decoGases.trimmingCharacters(in: .whitespaces).isEmpty {
             extras.append("deco \(decoGases)")
         }
-        if deepStops == "p" && !gfOn { extras.append("Pyle \(pyleTime) min") }
+        if deepStops == "p" && !gfOn && model != "emc" && !isNavy { extras.append("Pyle \(pyleTime) min") }
         if extStopShallow > 0 || extStopDeep > 0 {
             extras.append("ext stops \(extStopDeep)/\(extStopShallow) min")
         }
@@ -1464,7 +1516,27 @@ struct ConfigSheet: View {
                             Text("ZHL16-C").tag("c")
                             Text("VVAL-79").tag("vval")
                             Text("VPM-B").tag("vpm")
+                            Text("EMC-20H").tag("emc")
                         }.pickerStyle(.segmented).labelsHidden()
+                        row("U.S. Navy exact") {
+                            Picker("", selection: Binding(
+                                get: { m.isNavy ? m.model : "" },
+                                set: { v in
+                                    guard !v.isEmpty else { return }
+                                    m.model = v
+                                    m.lastStop = m.depthsMetric ? "6" : "20"
+                                })) {
+                                Text("Off").tag("")
+                                ForEach(PlannerModel.navyModels.indices, id: \.self) { i in
+                                    Text(PlannerModel.navyModels[i].name).tag(PlannerModel.navyModels[i].key)
+                                }
+                            }.pickerStyle(.menu).labelsHidden().frame(maxWidth: 300)
+                        }
+                        if m.isNavy {
+                            Text("33 fsw/atm, whole-minute stops, 20 fsw (6 m) last stop by default. Sea level only.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         if m.model == "c" {
                             Toggle("Gradient factors", isOn: $m.useGF)
                             HStack(spacing: 16) {
@@ -1473,6 +1545,28 @@ struct ConfigSheet: View {
                             }
                             .disabled(!m.useGF)
                             .opacity(m.useGF ? 1 : 0.4)
+                        }
+                    }
+                    if m.model == "emc" {
+                        group("EMC-20H") {
+                            row("Temp comp") {
+                                Picker("", selection: $m.emcTempComp) {
+                                    Text("Off").tag("off"); Text("Low").tag("low"); Text("High").tag("high")
+                                }.pickerStyle(.segmented).labelsHidden()
+                            }
+                            HStack(spacing: 16) {
+                                row2("Water (\(m.depthsMetric ? "°C" : "°F"))", $m.emcWaterTemp)
+                                row2("Workload (L/min)", $m.emcWorkload)
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Conservatism: \(Int(m.emcConservatism)) %  (0–50, adds C/200 to the depth factor)")
+                                Slider(value: $m.emcConservatism, in: 0...50, step: 1)
+                                    .frame(maxWidth: 360)
+                                    .tint(.secondary)
+                            }
+                            Text("Blank workload is Cochran's nominal. A 10 ft (3.048 m) stop distance matches Cochran Analyst.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     if m.model == "vpm" {
@@ -1525,6 +1619,10 @@ struct ConfigSheet: View {
                                    ? "Conservatism — VPM-B uses its own, above"
                                    : m.model == "vval"
                                    ? "Conservatism — not used by VVAL-79"
+                                   : m.model == "emc"
+                                   ? "Conservatism — EMC-20H uses its own, above"
+                                   : m.isNavy
+                                   ? "Conservatism: not used by the U.S. Navy models"
                                    : gfOn
                                    ? "Conservatism — not used with gradient factors"
                                    : "Conservatism: \(Int(m.conservatism)) %  (0–50 maximum)")
@@ -1549,7 +1647,7 @@ struct ConfigSheet: View {
                             }.pickerStyle(.segmented).labelsHidden()
                         }
                     }
-                    if !(m.useGF && m.model == "c") {
+                    if !(m.useGF && m.model == "c") && m.model != "emc" && !m.isNavy {
                         group("Deep stops") {
                             Picker("", selection: $m.deepStops) {
                                 Text("None").tag("n"); Text("Pyle").tag("p")
@@ -1582,10 +1680,15 @@ struct ConfigSheet: View {
                         editor($m.ascentRates, height: 76)
                     }
                     group("Deco Set Point (CCR) / Slide rate") {
+                        row("CCR setpoint") {
+                            Picker("", selection: $m.setpointAta) {
+                                Text("BAR").tag(false); Text("ATA").tag(true)
+                            }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 200)
+                        }
                         editor($m.decoSetpoints, height: 52)
                             .disabled(!m.circuitClosed)
                             .opacity(m.circuitClosed ? 1 : 0.4)
-                        row2("Slide rate (PO2/min)", $m.slideRate)
+                        row2("Slide rate (\(m.setpointAta ? "ata" : "bar")/min)", $m.slideRate)
                     }
                     group("Extended stops on a deco mix switch") {
                         HStack(spacing: 16) {

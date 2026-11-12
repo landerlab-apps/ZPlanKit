@@ -100,7 +100,7 @@ struct AltitudeSheet: View {
                     line("Oxygen cost", String(format: "CNS %.0f%%, %.0f OTU", r.oxygenCNS, r.oxygenOTU))
                 }
             } else {
-                Text("Not available for VVAL-79 dives.").font(.caption)
+                Text("Not available for this model.").font(.caption)
             }
             Divider()
             Text("Method 2  \(r.method2Name)").bold()

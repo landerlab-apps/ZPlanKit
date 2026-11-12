@@ -1,5 +1,110 @@
 ZPlanKit changelog
 
+1.41.2 (2026-11-12)
+  Planner (czplan.c), Fix v18.4: stop depths on whole multiples of the stop
+  distance. 1.39.0 built the grid up from the last stop, so a 4.5 m last
+  stop with 3 m stops gave 16.5, 13.5, 10.5, 7.5, 4.5. Stops are now the
+  multiples of the stop distance deeper than the last stop, then the last
+  stop: 15, 12, 9, 6, 4.5 (imperial 50, 40, 30, 20, 15 ft). A diver who
+  cannot leave the last stop stays there. Last stops that are a multiple of
+  the stop distance (3, 6, 9 m; 10, 20, 30 ft) are unchanged in every model
+  (680-plan comparison with 1.41.1, vval79_check 163/263/326, emc20h_check
+  PASS). Apps: Lplanner 1.11.1 (11) macOS/iOS, 1.11.1 (21) Android.
+
+1.41.1 (2026-11-10)
+  Planner (czplan.c), from Audit v18.0:
+  - VVAL-79 at altitude: Cross correction, as in the U.S. Navy Diving Manual.
+    Before, the tolerated pressure was p_surface + (Pt - MPTT0) and the
+    schedule got shorter with altitude (30 m 40 min air: 26, 11, 2, 0 min at
+    0, 1500, 2500, 3500 m). Now the model runs on P k, k = P_sea / P_site:
+    tolerated P = (P_sea + (Pt - MPTT0)) / k, stops at the sea-level stop
+    depths divided by k, equilibrated tissues at the sea-level tension, a
+    diver just arrived at k times it. Same dive: 26, 51, 70, 95 min. The plan
+    is identical to the sea-level plan for the sea level equivalent depth
+    (checked on 24 dives) and carries a note. The exact pressure ratio is
+    used, not the 1,000 ft bands and rounded depths of Table 9-4. Tissue
+    files hold actual tensions as before.
+  - Time to Fly, VVAL-79: washout with the Thalmann half-times (was the
+    Buhlmann table by index; 12 m 300 min air 2.5 h, now 4.5 h).
+  - Time to Fly, gradient factors: always GF High. A no-stop dive could be
+    tested against GF Low (10 m 200 min at GF 30/85: 37.5 h, now 3.0 h).
+  Sea-level schedules of every model are unchanged (144-plan comparison with
+  1.41.0, vval79_check 163/263/326, emc20h_check PASS).
+
+1.41.0 (2026-11-10)
+  Planner (czplan.c): three U.S. Navy exact models, run as the NEDU table
+  programs run them.
+  - Model: XVal-He-4B (NEDU TR 10-04), XVal-He-4 (NEDU TR 02-10),
+    VVAL-18 air (NEDU TR 07-09); short forms xhe4b, xhe4, vval18.
+  - Thalmann EL-DCM in fsw with 33 fsw/atm: P_I = (1 - FO2) P - 1.5,
+    X = P - 4.3, exponential uptake, linear washout above X, helium and
+    nitrogen summed, no tension floor. Closed circuit FO2 = min(SP 33 / P, 1),
+    SP in ata. Depths are converted with 1 ft = 1 fsw.
+  - Leave a stop when T_i <= b_i + s_i x for every compartment, x the next
+    stop depth (0 from the last stop). Stops in whole minutes, travel
+    excluded; each second of travel loads at the depth reached.
+  - XVal-He-4B: 8 compartments (10-240 min); XVal-He-4: 9 (5-240 min);
+    VVAL-18: 9, MPTT 120 ... 43.5, slope 1.
+  - A stop that does not clear within 600 min refuses the plan (XVal-He-4
+    deeper than about 210 fsw). Altitude refused. VVAL-18 refuses helium.
+    A tissue file without U.S. Navy tensions refuses a repetitive dive.
+  - Warning when an XVal-He plan is outside the MK 16 MOD 1 validation
+    (1.3 atm PO2 heliox, 200 fsw).
+  - Gradient factors, Pyle stops and Conservatism do not apply.
+  - Repetitive dives: the tissue file carries a "NAVY:" line of 9 tensions
+    (fsw), written and read by zp_emc_tissue_line / zp_read_emc_tissue_line;
+    the surface interval is run on air with the same kinetics.
+  - Altitude after diving: Method 1 unavailable for these models.
+  New key SetpointUnit: bar (default) or ata, for every model. Waypoint
+  setpoints, slide maxima, DecoSetpoint and SlideRate are read in that unit
+  and held in bar; each model converts what it needs (VVAL-79 and the Navy
+  models work in ata, EMC-20H in atm, ZHL-16C and VPM-B in bar). The report
+  prints "CCR setpoints in bar/ata" above a closed-circuit schedule, and the
+  SP and PO2 of closed-circuit rows in that unit. Before, VVAL-79 read the
+  setpoint as ata and the other models as bar. With SetpointUnit: bar,
+  ZHL-16C, VPM-B and EMC-20H plans are unchanged; with ata, VVAL-79 and the
+  Navy models are unchanged.
+  Checked against the NavyBench engine (vval18he_tester v16.9 plan_navy):
+  2,712 imperial dives (40-300 fsw, 10-90 min, CCR heliox, CCR trimix, OC
+  trimix with EAN50 and O2, air and nitrox, last stop 10 and 20 fsw):
+  2,704 identical, including all 296 plans with no schedule. The other 8
+  differ only in when EAN50 is first breathed when the bottom is shallower
+  than its switch depth (the planner switches at the next stop depth).
+  ZHL-16C, VVAL-79, VPM-B and EMC-20H: 3,584 reports identical to 1.40.0.
+  Reference/navy_check.sh against the 231 MK 16 MOD 1 schedules of NEDU
+  TR 02-10 Appendix J (60-200 fsw): XVal-He-4 228 within 1 min (worst
+  1.3), XVal-He-4B 219 within 1 min (worst 7.0 at 190-200 fsw, the dropped
+  1-minute deep stops TR 10-04 describes).
+
+1.40.0 (2026-10-27)
+  Planner (czplan.c): new model, Model: emc20h (also emc, cochran).
+  - Cochran EMC-20H: 20 compartments in equivalent-air-depth units, one
+    combined inert tension, exact uptake and first-order washout per second,
+    nitrogen and helium limits blended by the gas breathed, stop rule
+    T <= M + (1 - FO2) F X / 0.79, depth factor
+    F = (1 + W + Tc)(1 - 0.0175 min(n,30)) + C/200 + 26/512 with the
+    deep-stop credit earned from a first-stop projection every second.
+  - New keys: WaterTemp (C metric, F imperial), TempComp off/low/high,
+    Workload (L/min; default nominal 5/256). Conservatism feeds C/200.
+  - Stops are held to the second, not rounded to the minute. Pyle deep
+    stops and gradient factors are off for this model. Altitude refused.
+  - Repetitive dives: the tissue file carries an "EMC:" line of 20 tensions;
+    zp_emc_tissue_line / zp_read_emc_tissue_line write and read it. Surface
+    interval once per minute, T <- T (1 - 1/half-time).
+  - Time to fly and altitude Method 1 keep using the parallel ZHL-16C
+    tissues; Method 1 is reported unavailable for EMC-20H plans.
+  Reference: emc20h_check.sh against 70 Analyst plans, mean |total
+  difference| 0.16 min, largest 0.55 min.
+  VVAL-79: last stop now follows the VVal-79 parameter LST_DOMode = 1
+  (NEDU TR 12-01 Table B.2): the last stop is left when the tensions at
+  that stop are within the surfacing MPTTs, with no credit for the ascent
+  to the next stop increment. Changes only plans whose last stop is deeper
+  than the stop distance (e.g. a 20 ft last stop). can_surface_from_increment
+  removed. Against the 383 VVal-79 air schedules of TR 12-01 Appendix E:
+  exact 83 -> 163, within 1 min 213 -> 263, bias -1.69 -> -1.11 min
+  (Reference/vval79_check.sh).
+  Regression set unchanged (ZHL-16C 80, VVAL-79 8, VPM-B).
+
 1.39.3 (2026-10-09)
   Planner (czplan.c):
   - The EAD column honours O2 narcotic. On a helium mix it prints the END

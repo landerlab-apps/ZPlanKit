@@ -568,7 +568,7 @@ void zp_altitude(const zp_config *cfg, const zp_result *res, const double *icm,
                         .gf_limit = req[ZPA_REQ_M1_DIVE_GF] > 0.5 || ndl <= 0 ? gfh : alt_dan_anchor_gf(&ref),
                         .o2_fo2 = fo2, .o2_min = o2, .o2_last = o2last, .wait_min = wait,
                         .max_search_min = 72 * 60 };
-    bool m1 = cfg->use_vval != 1;
+    bool m1 = cfg->use_vval == 0 || cfg->use_vval == 2;
     ans[ZPA_M1_AVAILABLE] = m1;
     ans[ZPA_M1_LIMIT_GF] = a1.gf_limit;
     if (m1) {

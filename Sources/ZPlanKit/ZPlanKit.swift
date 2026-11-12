@@ -61,6 +61,9 @@ public struct TissueState {
     public let pN2Bar: [Double]   // 17 compartments, 1b (4.0 min) first
     public let pHeBar: [Double]
     public let cnsPercent: Double
+    /// EMC-20H tensions (EAD fsw) or U.S. Navy tensions (fsw), present only
+    /// after a plan with one of those models.
+    public var emcLine: String = ""
 
     private static let atm = 1.01325
 
@@ -68,7 +71,7 @@ public struct TissueState {
         var s = String(format: "CNS:%f\n", cnsPercent)
         for v in pN2Bar { s += String(format: "%f\n", v / Self.atm) }
         for v in pHeBar { s += String(format: "%f\n", v / Self.atm) }
-        return s
+        return s + emcLine
     }
 }
 
@@ -124,6 +127,9 @@ public enum ZPlan {
         for raw in tissueText.split(whereSeparator: \.isNewline) {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("CNS:") { cns = Double(line.dropFirst(4)) ?? 0; continue }
+            if line.hasPrefix("EMC:") || line.hasPrefix("NAVY:") {
+                _ = line.withCString { zp_read_emc_tissue_line($0, &cfg) }; continue
+            }
             guard let v = Double(line) else { continue }
             if n2.count < 17 { n2.append(v * atm) } else if he.count < 17 { he.append(v * atm) }
         }
@@ -177,9 +183,12 @@ private extension DivePlan {
         self.timeToFlyHours = r.time_to_fly_hr
         self.gasUsed = gases
         self.totalOpenCircuitLiters = r.total_oc_l
+        var emc = [CChar](repeating: 0, count: 512)
+        _ = zp_emc_tissue_line(&r, &emc, 512)
         self.tissueState = TissueState(pN2Bar: arr17(r.end_pn2),
                                        pHeBar: arr17(r.end_phe),
-                                       cnsPercent: r.end_cns_pct)
+                                       cnsPercent: r.end_cns_pct,
+                                       emcLine: String(cString: emc))
         self.warnings = withUnsafeBytes(of: &r.warnings) { raw in
             String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
         }

@@ -22,10 +22,11 @@ static char *slurp(const char *path) {
 static void load_tissues(const char *path, zp_config *cfg) {
     FILE *f = fopen(path, "r");
     if (!f) return;
-    char line[128];
+    char line[512];
     int idx = 0;
     while (fgets(line, sizeof line, f)) {
         if (!strncmp(line, "CNS:", 4)) { cfg->init_cns_pct = atof(line+4); continue; }
+        if (zp_read_emc_tissue_line(line, cfg)) continue;
         double v = atof(line);
         if (idx < ZP_COMPARTMENTS) cfg->init_pn2[idx] = v * ATM;
         else if (idx < 2*ZP_COMPARTMENTS) cfg->init_phe[idx-ZP_COMPARTMENTS] = v * ATM;
@@ -42,6 +43,8 @@ static void save_tissues(const char *path, const zp_result *r) {
     fprintf(f, "CNS:%f\n", r->end_cns_pct);
     for (int i = 0; i < ZP_COMPARTMENTS; i++) fprintf(f, "%f\n", r->end_pn2[i] / ATM);
     for (int i = 0; i < ZP_COMPARTMENTS; i++) fprintf(f, "%f\n", r->end_phe[i] / ATM);
+    char emc[512];
+    if (zp_emc_tissue_line(r, emc, sizeof emc) > 0) fputs(emc, f);
     fclose(f);
     printf("Tissues saved to %s\n", path);
 }

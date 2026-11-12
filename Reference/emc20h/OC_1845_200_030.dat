@@ -1,0 +1,15 @@
+# Analyst 139.93 min, first stop 130 ft
+UseMetric: n
+SaltWater: y
+Model: emc20h
+Conservatism: 0
+WaterTemp: 75
+TempComp: High
+StopDistance: 10
+LastStopDepth: 10
+DescentRate: 0-1000, 150.000000
+AscentRate: 1000-61, 60
+AscentRate: 61-0, 30
+OcDecoMaxPO2: 1.6
+MaxEND: 300
+200, 28.666667, 18/45
